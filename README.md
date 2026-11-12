@@ -99,6 +99,25 @@ npm run dev
 
 ## 故障排查（Windows）
 
+### 双击没反应 / 安装器提示「GMCH IDE 无法关闭」/ 安装后没有卸载项
+
+先检查目录的**完整性级别**（本项目在 DSH 沙箱里开发时，工作区被标过 Low IL，导致 Chromium 拒绝启动、安装器无法写 HKCU）：
+
+```powershell
+icacls "G:\code\gmch_ide" | findstr Mandatory
+```
+
+如果输出包含 `Low Mandatory Level`，修复：
+
+```powershell
+icacls "G:\code\gmch_ide" /setintegritylevel (OI)(CI)M /T
+```
+
+对解压目录同样处理（把路径换成实际解压目录），或者直接把应用放到 `C:\Users\<你>\Programs\` 这类默认 Medium 的目录。修复后：
+
+- `GMCH IDE.exe` 双击可正常启动；
+- 安装器不会再误报「无法关闭」，卸载项与开始菜单快捷方式也会正常写入。
+
 ### 安装时提示「GMCH IDE 无法关闭」
 
 这是 electron-builder 安装器的进程/文件占用检查，不是安装包损坏：
@@ -120,7 +139,7 @@ taskkill /F /IM "GMCH IDE.exe" /T
 常见结论：
 
 - 日志停在 `singleInstanceLock=false`：已有隐藏实例，结束 `GMCH IDE.exe` 后重试；
-- 日志停在 `boot` 之前、Chromium 日志为空：Electron/Chromium 在系统层面启动失败，优先检查 UAC 是否被关闭（`EnableLUA=0` 会让 Chromium 沙箱初始化失败）与安全软件拦截；
+- 日志停在 `boot` 之前、Chromium 日志为空：优先检查上面的完整性标签，其次是安全软件拦截；
 - 日志中有 `uncaught`：按堆栈定位，属于应用代码问题。
 
 ## 许可
