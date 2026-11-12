@@ -18,14 +18,17 @@ const files = readdirSync(dist)
   .filter((name) => !['builder-debug.yml', 'builder-effective-config.yaml', '.icon-ico', 'win-unpacked', 'mac', 'linux-unpacked'].includes(name))
   .filter((name) => statSync(join(dist, name)).isFile())
 const expected = [
-  { platform: 'Windows', pattern: /-setup\.exe$/ },
-  { platform: 'macOS', pattern: /\.(dmg|zip)$/ },
-  { platform: 'Linux', pattern: /\.(AppImage|deb)$/ }
+  { platform: 'Windows', test: (name) => /-setup\.exe$/.test(name) || /-win\.zip$/.test(name) },
+  {
+    platform: 'macOS',
+    test: (name) => /\.dmg$/.test(name) || (/\.zip$/.test(name) && !/-win\.zip$/.test(name))
+  },
+  { platform: 'Linux', test: (name) => /\.(AppImage|deb)$/.test(name) }
 ]
 
 let found = 0
 for (const item of expected) {
-  const matches = files.filter((name) => item.pattern.test(name))
+  const matches = files.filter(item.test)
   if (matches.length > 0) found += 1
   const detail = matches.length > 0 ? matches.join(', ') : '（本机未构建）'
   console.log(`${item.platform.padEnd(8)} ${detail}`)
