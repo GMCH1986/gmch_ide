@@ -119,6 +119,18 @@ icacls "G:\code\gmch_ide" /setintegritylevel (OI)(CI)M /T
 - `GMCH IDE.exe` 双击可正常启动；
 - 安装器不会再误报「无法关闭」，卸载项与开始菜单快捷方式也会正常写入。
 
+### 新建工程时点「浏览…」闪退
+
+已在当前版本修复：Electron 在 Windows 上解析文件对话框的父窗口 HWND 时存在已知崩溃（`0xc000041d`，见 electron#45673 / PR#53583）。现在目录选择对话框不再传入父窗口，并在主进程记录 `pick-directory` 日志：
+
+```
+%APPDATA%\gmch-ide\startup.log
+  pick-directory: opening dialog
+  pick-directory: canceled=false
+```
+
+如果仍闪退，把这两行日志和 Windows 事件查看器里的 `Application Error` 记录发出来；临时可以跳过「浏览…」，直接在「存放目录」输入框里粘贴路径。
+
 ### 安装时提示「GMCH IDE 无法关闭」
 
 这是 electron-builder 安装器的进程/文件占用检查，不是安装包损坏：

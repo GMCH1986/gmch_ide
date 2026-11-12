@@ -289,29 +289,47 @@ function registerIpc(): void {
 
   ipcMain.handle('workspace:pick-directory', async (): Promise<string | null> => {
     if (!mainWindow) return null
-    const result = await dialog.showOpenDialog(mainWindow, {
-      title: '选择工程存放目录',
-      properties: ['openDirectory', 'createDirectory']
-    })
-    return result.canceled ? null : (result.filePaths[0] ?? null)
+    try {
+      bootLog('pick-directory: opening dialog')
+      // 不传父窗口：Windows 上 Electron 解析父 HWND 存在已知崩溃（0xc000041d），
+      // 参见 electron#45673 / PR#53583；无父窗口的对话框更稳定
+      const result = await dialog.showOpenDialog({
+        title: '选择工程存放目录',
+        defaultPath: workspace ?? undefined,
+        properties: ['openDirectory']
+      })
+      bootLog(`pick-directory: canceled=${result.canceled}`)
+      return result.canceled ? null : (result.filePaths[0] ?? null)
+    } catch (error) {
+      bootLog(`pick-directory failed: ${String(error)}`)
+      return null
+    }
   })
 
   ipcMain.handle('workspace:pick', async (): Promise<WorkspaceInfo | null> => {
     if (!mainWindow) return null
-    const result = await dialog.showOpenDialog(mainWindow, {
-      title: '选择 Gradle 工程目录',
-      properties: ['openDirectory']
-    })
-    if (result.canceled || !result.filePaths[0]) return null
+    try {
+      bootLog('pick-workspace: opening dialog')
+      const result = await dialog.showOpenDialog({
+        title: '选择 Gradle 工程目录',
+        defaultPath: workspace ?? undefined,
+        properties: ['openDirectory']
+      })
+      bootLog(`pick-workspace: canceled=${result.canceled}`)
+      if (result.canceled || !result.filePaths[0]) return null
 
-    const selected = result.filePaths[0]
-    if (!(await setWorkspacePath(selected))) {
-      dialog.showErrorBox('无法打开工作区', '后端未就绪或目录不可访问，请稍后重试。')
+      const selected = result.filePaths[0]
+      if (!(await setWorkspacePath(selected))) {
+        dialog.showErrorBox('无法打开工作区', '后端未就绪或目录不可访问，请稍后重试。')
+        return null
+      }
+      workspace = selected
+      writeJson(settingsFile(), { workspace })
+      return workspaceInfo()
+    } catch (error) {
+      bootLog(`pick-workspace failed: ${String(error)}`)
       return null
     }
-    workspace = selected
-    writeJson(settingsFile(), { workspace })
-    return workspaceInfo()
   })
 
   ipcMain.handle('shell:open-external', (_event, url: string) => {
