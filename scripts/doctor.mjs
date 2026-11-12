@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -8,12 +8,20 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const isWin = process.platform === 'win32'
 const results = []
 
+/** JAVA_HOME 优先，其次使用仓库内的便携 JDK（.tools/jdk-*） */
+function resolveJavaHome() {
+  if (process.env.JAVA_HOME) return process.env.JAVA_HOME
+  const tools = join(root, '.tools')
+  if (!existsSync(tools)) return ''
+  const dir = readdirSync(tools).find((name) => name.startsWith('jdk-'))
+  return dir ? join(tools, dir) : ''
+}
+
 function check(name, ok, detail) {
   results.push({ name, ok, detail })
 }
 
-function javaMajor() {
-  const javaHome = process.env.JAVA_HOME
+function javaMajor(javaHome) {
   const bin = javaHome
     ? join(javaHome, 'bin', isWin ? 'java.exe' : 'java')
     : 'java'
@@ -28,11 +36,15 @@ function javaMajor() {
 const nodeMajor = Number(process.versions.node.split('.')[0])
 check('Node.js ≥ 22', nodeMajor >= 22, process.version)
 
-const java = javaMajor()
+const javaHome = resolveJavaHome()
+const java = javaMajor(javaHome)
 check('JDK ≥ 21（构建 sidecar 需要）', java.major >= 21, java.text)
 
-const javaHome = process.env.JAVA_HOME
-check('JAVA_HOME', Boolean(javaHome) && existsSync(javaHome), javaHome || '(未设置)')
+check(
+  'JDK 路径',
+  Boolean(javaHome) && existsSync(javaHome),
+  javaHome ? (process.env.JAVA_HOME ? javaHome : `${javaHome}（.tools 便携 JDK）`) : '(未设置)'
+)
 
 const wrapper = join(root, 'backend', isWin ? 'gradlew.bat' : 'gradlew')
 check(
@@ -42,7 +54,7 @@ check(
 )
 
 const jlink = javaHome ? join(javaHome, 'bin', isWin ? 'jlink.exe' : 'jlink') : ''
-check('jlink（打包运行时）', Boolean(jlink) && existsSync(jlink), jlink || '(JAVA_HOME 未设置)')
+check('jlink（打包运行时）', Boolean(jlink) && existsSync(jlink), jlink || '(JDK 路径未设置)')
 
 const width = Math.max(...results.map((item) => item.name.length))
 for (const item of results) {

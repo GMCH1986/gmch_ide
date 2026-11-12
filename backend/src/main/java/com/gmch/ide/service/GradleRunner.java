@@ -3,6 +3,7 @@ package com.gmch.ide.service;
 import com.gmch.ide.config.Workspace;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.BufferedReader;
@@ -29,10 +30,13 @@ public class GradleRunner {
     private static final Set<String> ALLOWED_TASKS = Set.of("run", "compileJava", "test", "build");
 
     private final Workspace workspace;
+    /** 用户 JDK（由 Electron 主进程从 JAVA_HOME 传入），用于 Gradle 编译 */
+    private final String javaHome;
     private final AtomicReference<Process> current = new AtomicReference<>();
 
-    public GradleRunner(Workspace workspace) {
+    public GradleRunner(Workspace workspace, @Value("${app.java-home:}") String javaHome) {
         this.workspace = workspace;
+        this.javaHome = javaHome;
         Runtime.getRuntime().addShutdownHook(new Thread(this::stop, "gradle-shutdown"));
     }
 
@@ -60,6 +64,10 @@ public class GradleRunner {
                 "JAVA_TOOL_OPTIONS",
                 "-Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8"
         );
+        // gradlew 优先使用 JAVA_HOME；显式传入可避免回退到 PATH 上的旧版 JDK
+        if (javaHome != null && !javaHome.isBlank()) {
+            builder.environment().put("JAVA_HOME", javaHome);
+        }
 
         Process process = builder.start();
         current.set(process);

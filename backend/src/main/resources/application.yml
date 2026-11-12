@@ -18,3 +18,5 @@ logging:
 app:
   token: ''
   workspace: ''
+  # 用户 JDK 路径（Electron 主进程从 JAVA_HOME 传入），供 Gradle 编译使用
+  java-home: ''

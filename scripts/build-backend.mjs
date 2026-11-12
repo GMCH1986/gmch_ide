@@ -6,8 +6,8 @@
  *   3. 汇总到 build/backend/{app.jar,runtime}
  */
 import { spawnSync } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -44,10 +44,26 @@ function run(label, command, args, cwd) {
   }
 }
 
-const javaHome = process.env.JAVA_HOME
-if (!javaHome) fail('请设置 JAVA_HOME 指向 JDK 21')
+/**
+ * JAVA_HOME 优先；否则回退到仓库内的便携 JDK（.tools/jdk-*，gitignore），
+ * 方便没有全局 JDK 21 的开发机直接构建。
+ */
+function resolveJavaHome() {
+  if (process.env.JAVA_HOME) return process.env.JAVA_HOME
+  const tools = join(root, '.tools')
+  if (!existsSync(tools)) return null
+  const dir = readdirSync(tools).find((name) => name.startsWith('jdk-'))
+  return dir ? join(tools, dir) : null
+}
+
+const javaHome = resolveJavaHome()
+if (!javaHome) fail('请设置 JAVA_HOME 指向 JDK 21（或在 .tools/ 放置便携 JDK）')
 const jlink = join(javaHome, 'bin', isWin ? 'jlink.exe' : 'jlink')
 if (!existsSync(jlink)) fail(`未找到 jlink：${jlink}`)
+
+// 让 gradlew 也使用同一个 JDK，否则它会回退到 PATH 上的 java（可能是 1.8）
+process.env.JAVA_HOME = javaHome
+process.env.PATH = `${join(javaHome, 'bin')}${delimiter}${process.env.PATH ?? ''}`
 
 const wrapper = join(backend, isWin ? 'gradlew.bat' : 'gradlew')
 if (!existsSync(wrapper)) {

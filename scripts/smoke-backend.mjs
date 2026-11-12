@@ -9,7 +9,7 @@
  * 默认使用 examples/hello-java，需要本机具备 JDK 21（Gradle 构建用）。
  */
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -24,6 +24,22 @@ const port = 18090 + Math.floor(Math.random() * 50)
 const base = `http://127.0.0.1:${port}`
 const tmpDir = join(root, '.tmp', 'smoke')
 mkdirSync(tmpDir, { recursive: true })
+
+/** 与 build-backend 一致的 JDK 解析：JAVA_HOME 优先，其次 .tools 便携 JDK */
+function resolveJavaHome() {
+  if (process.env.JAVA_HOME) return process.env.JAVA_HOME
+  const tools = join(root, '.tools')
+  if (!existsSync(tools)) return ''
+  const dir = readdirSync(tools).find((name) => name.startsWith('jdk-'))
+  return dir ? join(tools, dir) : ''
+}
+
+const javaHome = resolveJavaHome()
+const childEnv = { ...process.env }
+if (javaHome) {
+  // sidecar 内的 Gradle 构建需要 JDK（jlink 运行时不含 javac）
+  childEnv.JAVA_HOME = javaHome
+}
 
 function fail(message) {
   console.error(`\n[smoke] FAIL: ${message}`)
@@ -45,7 +61,7 @@ const child = spawn(
     `--app.token=${token}`,
     `--app.workspace=${workspace}`
   ],
-  { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }
+  { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: childEnv }
 )
 let stderr = ''
 child.stderr.on('data', (chunk) => {

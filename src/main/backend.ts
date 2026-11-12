@@ -92,6 +92,8 @@ export async function startBackend(workspace: string | null): Promise<BackendInf
     `--app.token=${token}`
   ]
   if (workspace) args.push(`--app.workspace=${workspace}`)
+  // 用户 JDK 供 Gradle 构建使用；sidecar 自带的 jlink 运行时不含 javac
+  if (process.env.JAVA_HOME) args.push(`--app.java-home=${process.env.JAVA_HOME}`)
 
   child = spawn(java, args, {
     cwd: root,
