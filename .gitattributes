@@ -1,0 +1,16 @@
+* text=auto eol=lf
+
+# Windows 批处理必须是 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制
+*.jar binary
+*.png binary
+*.ico binary
+*.icns binary
+*.zip binary
+*.exe binary
+
+# Gradle Wrapper 在 Unix 上必须可执行
+gradlew text eol=lf

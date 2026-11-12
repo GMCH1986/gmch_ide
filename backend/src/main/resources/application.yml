@@ -1,0 +1,20 @@
+server:
+  # 只监听本机回环地址，端口由 Electron 主进程通过启动参数指定
+  address: 127.0.0.1
+  port: 0
+
+spring:
+  main:
+    banner-mode: off
+  mvc:
+    async:
+      # SSE 连接可能长时间保持，交给 emitter 自己控制超时
+      request-timeout: -1ms
+
+logging:
+  level:
+    root: warn
+
+app:
+  token: ''
+  workspace: ''

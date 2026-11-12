@@ -1,0 +1,31 @@
+node_modules/
+out/
+dist/
+
+# electron-builder 资源目录：只保留图标
+/build/*
+!/build/icon.png
+
+# 构建产物
+build/backend/
+backend/build/
+examples/*/build/
+
+# Gradle
+**/.gradle/
+.gradle-home/
+
+# 缓存与临时目录
+.cache/
+.npm-cache/
+.tools/
+.tmp/
+
+# 研究用仓库
+_repos/
+
+*.log
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json

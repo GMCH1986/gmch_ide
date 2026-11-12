@@ -1,0 +1,52 @@
+appId: com.gmch.ide
+productName: GMCH IDE
+copyright: Copyright © 2026 GMCH
+
+directories:
+  buildResources: build
+  output: dist
+
+files:
+  - out/**/*
+  - package.json
+
+extraResources:
+  - from: build/backend
+    to: backend
+  - from: resources
+    to: resources
+
+asar: true
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  executableName: GMCH IDE
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${name}-${version}-setup.${ext}
+  shortcutName: ${productName}
+
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.developer-tools
+  artifactName: ${name}-${version}-${arch}.${ext}
+
+dmg:
+  artifactName: ${name}-${version}.${ext}
+
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Development
+  maintainer: GMCH
+  artifactName: ${name}-${version}.${ext}
+
+npmRebuild: false

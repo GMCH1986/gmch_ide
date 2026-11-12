@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows-x64
+            command: npm run build:win
+          - os: macos-latest
+            name: macos-universal
+            command: npm run build:mac
+          - os: ubuntu-latest
+            name: linux-x64
+            command: npm run build:linux
+    env:
+      # 未配置签名证书时避免 electron-builder 尝试自动发现
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Ensure Gradle wrapper
+        shell: bash
+        working-directory: backend
+        run: |
+          if [ ! -f gradlew ] && [ ! -f gradlew.bat ]; then
+            gradle wrapper --gradle-version 8.12
+          fi
+
+      - run: npm ci
+
+      - name: Build installer
+        run: ${{ matrix.command }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            dist/*
+          if-no-files-found: error
+          retention-days: 14
