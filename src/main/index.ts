@@ -1,8 +1,39 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
-import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import type { AppInfo, MenuAction, WorkspaceInfo } from '../shared/types'
 import { getBackendInfo, setWorkspacePath, startBackend, stopBackend } from './backend'
+
+/**
+ * 启动诊断日志：写到 %APPDATA%\gmch-ide\startup.log。
+ * 打包后双击无反应时，这是唯一能拿到的现场（GUI 进程没有控制台输出）。
+ */
+function bootLog(message: string): void {
+  try {
+    const base = process.env.APPDATA ?? app.getPath('appData')
+    const dir = join(base, 'gmch-ide')
+    mkdirSync(dir, { recursive: true })
+    appendFileSync(join(dir, 'startup.log'), `${new Date().toISOString()} ${message}\n`, 'utf-8')
+  } catch {
+    // 日志失败不能影响启动
+  }
+}
+
+bootLog(`boot pid=${process.pid} argv=${process.argv.slice(1).join(' ')}`)
+
+process.on('uncaughtException', (error) => {
+  bootLog(`uncaught: ${error.stack ?? error.message}`)
+  dialog.showErrorBox('GMCH IDE 启动失败', error.stack ?? error.message)
+  app.exit(1)
+})
+
+process.on('unhandledRejection', (reason) => {
+  bootLog(`unhandledRejection: ${String(reason)}`)
+})
+
+app.on('child-process-gone', (_event, details) => {
+  bootLog(`child-process-gone type=${details.type} reason=${details.reason} exitCode=${details.exitCode}`)
+})
 
 interface Settings {
   workspace: string | null
@@ -161,7 +192,20 @@ function createWindow(): void {
   if (state.isMaximized) mainWindow.maximize()
 
   mainWindow.on('ready-to-show', () => {
+    bootLog('window ready-to-show')
     mainWindow?.show()
+  })
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    bootLog('renderer did-finish-load')
+  })
+
+  mainWindow.webContents.on('did-fail-load', (_event, code, description, url) => {
+    bootLog(`renderer did-fail-load code=${code} ${description} url=${url}`)
+  })
+
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    bootLog(`renderer gone reason=${details.reason} exitCode=${details.exitCode}`)
   })
 
   // 关闭守卫：交给渲染进程确认未保存内容后再真正关闭。
@@ -217,6 +261,16 @@ function createWindow(): void {
   } else {
     void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  // ready-to-show 依赖渲染进程首帧；渲染进程异常时窗口会永远隐藏，
+  // 表现为「双击没反应」。这里加兜底，到点强制显示（哪怕空白）。
+  setTimeout(() => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    if (!mainWindow.isVisible()) {
+      bootLog('force show: ready-to-show did not fire in 2.5s')
+      mainWindow.show()
+    }
+  }, 2500)
 }
 
 function registerIpc(): void {
@@ -263,17 +317,22 @@ function registerIpc(): void {
 }
 
 const gotLock = app.requestSingleInstanceLock()
+bootLog(`singleInstanceLock=${gotLock}`)
 
 if (!gotLock) {
+  bootLog('quit: another instance holds the lock')
   app.quit()
 } else {
   app.on('second-instance', () => {
+    bootLog('second-instance received')
     if (!mainWindow) return
     if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
     mainWindow.focus()
   })
 
   app.whenReady().then(() => {
+    bootLog('app ready')
     app.setAppUserModelId('com.gmch.ide')
 
     const settings = readJson<Settings>(settingsFile(), { workspace: null })
@@ -282,8 +341,10 @@ if (!gotLock) {
     buildMenu()
     registerIpc()
     createWindow()
+    bootLog('window created')
 
     void startBackend(workspace).then((info) => {
+      bootLog(`backend status=${info.status} ${info.message ?? ''}`)
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('backend:status', info)
       }

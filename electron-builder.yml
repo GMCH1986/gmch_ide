@@ -26,6 +26,10 @@ win:
     - target: zip
       arch: [x64]
   executableName: GMCH IDE
+  extraFiles:
+    # 双击无反应时，用这个脚本启动可以看到退出码并生成日志
+    - from: build/launcher/GMCH IDE 诊断启动.cmd
+      to: GMCH IDE 诊断启动.cmd
 
 nsis:
   oneClick: false

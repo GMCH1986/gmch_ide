@@ -5,6 +5,8 @@ dist/
 # electron-builder 资源目录：只保留图标
 /build/*
 !/build/icon.png
+!/build/launcher/
+!/build/launcher/**
 
 # 构建产物
 build/backend/

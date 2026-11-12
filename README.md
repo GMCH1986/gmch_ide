@@ -97,6 +97,32 @@ npm run dev
 | [03-发布验证](docs/03-发布验证.md) | 构建、冒烟 S1–S10、安装/卸载、签名状态 |
 | [04-路线图](docs/04-路线图.md) | v0.1 → v1.0 规划与阻塞项 |
 
+## 故障排查（Windows）
+
+### 安装时提示「GMCH IDE 无法关闭」
+
+这是 electron-builder 安装器的进程/文件占用检查，不是安装包损坏：
+
+```powershell
+tasklist | findstr /i gmch
+taskkill /F /IM "GMCH IDE.exe" /T
+```
+
+先结束残留进程再点「重试」；仍失败就点「取消」，改用免安装包 `GMCH IDE-0.1.0-win.zip`。
+
+### 双击 GMCH IDE.exe 没有反应
+
+解压后先运行 `GMCH IDE 诊断启动.cmd`（会带 `--no-sandbox` 并输出退出码），然后查看：
+
+- `%APPDATA%\gmch-ide\startup.log`：应用启动日志（单实例锁、窗口、渲染进程、后端状态）；
+- `%APPDATA%\gmch-ide\chromium.log`：Chromium 日志。
+
+常见结论：
+
+- 日志停在 `singleInstanceLock=false`：已有隐藏实例，结束 `GMCH IDE.exe` 后重试；
+- 日志停在 `boot` 之前、Chromium 日志为空：Electron/Chromium 在系统层面启动失败，优先检查 UAC 是否被关闭（`EnableLUA=0` 会让 Chromium 沙箱初始化失败）与安全软件拦截；
+- 日志中有 `uncaught`：按堆栈定位，属于应用代码问题。
+
 ## 许可
 
 内部项目，未授权不得外部分发。
