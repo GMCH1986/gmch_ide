@@ -22,6 +22,15 @@ let mainWindow: BrowserWindow | null = null
 let workspace: string | null = null
 /** 关闭守卫放行标志：为真时窗口可以直接关闭 */
 let allowClose = false
+/** 关闭守卫等待渲染进程确认的兜底定时器 */
+let closeGuardTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearCloseGuardTimer(): void {
+  if (closeGuardTimer) {
+    clearTimeout(closeGuardTimer)
+    closeGuardTimer = null
+  }
+}
 
 function settingsFile(): string {
   return join(app.getPath('userData'), 'settings.json')
@@ -130,6 +139,7 @@ function createWindow(): void {
   // macOS 关闭窗口后应用仍驻留，Dock 重新开窗时必须复位放行标志，
   // 否则新窗口的关闭会跳过未保存确认
   allowClose = false
+  clearCloseGuardTimer()
   mainWindow = new BrowserWindow({
     width: state.width,
     height: state.height,
@@ -154,14 +164,38 @@ function createWindow(): void {
     mainWindow?.show()
   })
 
-  // 关闭守卫：交给渲染进程确认未保存内容后再真正关闭
+  // 关闭守卫：交给渲染进程确认未保存内容后再真正关闭。
+  // 渲染进程卡死时用原生对话框兜底，避免主进程永久存活、阻挡安装/卸载。
   mainWindow.on('close', (event) => {
     if (allowClose) return
     event.preventDefault()
+
+    if (!closeGuardTimer) {
+      const win = mainWindow
+      closeGuardTimer = setTimeout(() => {
+        closeGuardTimer = null
+        if (!win || win.isDestroyed() || allowClose) return
+        const choice = dialog.showMessageBoxSync(win, {
+          type: 'warning',
+          buttons: ['取消', '强制退出'],
+          defaultId: 0,
+          cancelId: 0,
+          title: 'GMCH IDE',
+          message: '界面未响应，是否强制退出？',
+          detail: '强制退出会丢失未保存的修改。'
+        })
+        if (choice === 1) {
+          allowClose = true
+          win.destroy()
+        }
+      }, 10_000)
+    }
+
     mainWindow?.webContents.send('app:close-request')
   })
 
   mainWindow.on('closed', () => {
+    clearCloseGuardTimer()
     mainWindow = null
   })
 
@@ -221,6 +255,7 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('app:close', () => {
+    clearCloseGuardTimer()
     allowClose = true
     saveWindowState()
     mainWindow?.close()

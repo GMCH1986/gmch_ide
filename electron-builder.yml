@@ -22,12 +22,17 @@ win:
   target:
     - target: nsis
       arch: [x64]
+    # 免安装包：遇到进程占用 / 无权限安装时可直接解压运行
+    - target: zip
+      arch: [x64]
   executableName: GMCH IDE
 
 nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
+  # 安装完成后不自动启动，避免「装完就在运行」导致再次安装时提示无法关闭
+  runAfterFinish: false
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
 

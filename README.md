@@ -69,6 +69,7 @@ npm run dev
 | 健康检查 / 鉴权 / 文件 API / SSE 编译 | ✅ `npm run smoke:backend` |
 | Windows 解包产物（`dist/win-unpacked`） | ✅ |
 | Windows NSIS 安装包 | ✅ `dist/gmch-ide-0.1.0-setup.exe`（148 MB） |
+| Windows 免安装包 | ✅ `dist/GMCH IDE-0.1.0-win.zip`（181 MB） |
 | GUI 冒烟 S1–S10 | ⏳ 需普通桌面环境/CI |
 
 完整记录见 [docs/03-发布验证.md](docs/03-发布验证.md) 第 2.6 节。
