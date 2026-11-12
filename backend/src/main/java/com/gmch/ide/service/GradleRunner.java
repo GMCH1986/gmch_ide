@@ -1,25 +1,34 @@
 package com.gmch.ide.service;
 
 import com.gmch.ide.config.Workspace;
+import org.gradle.tooling.BuildCancelledException;
+import org.gradle.tooling.BuildException;
+import org.gradle.tooling.BuildLauncher;
+import org.gradle.tooling.CancellationTokenSource;
+import org.gradle.tooling.GradleConnector;
+import org.gradle.tooling.ProjectConnection;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
-import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 /**
- * 执行工作区自带的 Gradle Wrapper。
- * 同一时刻只允许一个任务；停止时连同子进程树一起销毁，避免 daemon 之外残留 java 进程。
+ * 通过 Gradle Tooling API 执行工作区任务。
+ *
+ * <p>不用 ProcessBuilder 调 gradlew：Electron 以无控制台方式启动 sidecar 后，
+ * cmd.exe / gradle wrapper 会为新控制台创建 conhost 窗口，表现为点「运行」时闪黑框。
+ * Tooling API 在进程内驱动 Gradle daemon，不产生控制台窗口，同时保留流式输出与取消能力。</p>
  */
 @Service
 public class GradleRunner {
@@ -30,13 +39,15 @@ public class GradleRunner {
     private static final Set<String> ALLOWED_TASKS = Set.of("run", "compileJava", "test", "build");
 
     private final Workspace workspace;
-    /** 用户 JDK（由 Electron 主进程从 JAVA_HOME 传入），用于 Gradle 编译 */
     private final String javaHome;
-    private final AtomicReference<Process> current = new AtomicReference<>();
+    private final AtomicReference<CancellationTokenSource> current = new AtomicReference<>();
 
     public GradleRunner(Workspace workspace, @Value("${app.java-home:}") String javaHome) {
         this.workspace = workspace;
-        this.javaHome = javaHome;
+        String environmentJavaHome = System.getenv("JAVA_HOME");
+        this.javaHome = javaHome == null || javaHome.isBlank()
+                ? (environmentJavaHome == null ? "" : environmentJavaHome)
+                : javaHome;
         Runtime.getRuntime().addShutdownHook(new Thread(this::stop, "gradle-shutdown"));
     }
 
@@ -47,53 +58,114 @@ public class GradleRunner {
         stop();
 
         Path root = workspace.root();
-        boolean windows = System.getProperty("os.name", "").toLowerCase().contains("win");
-        Path wrapper = root.resolve(windows ? "gradlew.bat" : "gradlew");
-        if (!Files.isRegularFile(wrapper)) {
+        if (!Files.isRegularFile(root.resolve("gradlew"))
+                && !Files.isRegularFile(root.resolve("gradlew.bat"))) {
             throw new IllegalStateException("工作区缺少 Gradle Wrapper（gradlew / gradlew.bat）");
         }
-
-        List<String> command = windows
-                ? List.of("cmd.exe", "/c", "gradlew.bat", task, "--console=plain", "-q")
-                : List.of(wrapper.toString(), task, "--console=plain", "-q");
-
-        ProcessBuilder builder = new ProcessBuilder(command)
-                .directory(root.toFile())
-                .redirectErrorStream(true);
-        builder.environment().putIfAbsent(
-                "JAVA_TOOL_OPTIONS",
-                "-Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8"
-        );
-        // gradlew 优先使用 JAVA_HOME；显式传入可避免回退到 PATH 上的旧版 JDK
-        if (javaHome != null && !javaHome.isBlank()) {
-            builder.environment().put("JAVA_HOME", javaHome);
+        Path javac = javaHome == null || javaHome.isBlank()
+                ? null
+                : Path.of(javaHome, "bin", "javac");
+        if (javac == null
+                || (!Files.isRegularFile(javac) && !Files.isRegularFile(Path.of(javaHome, "bin", "javac.exe")))) {
+            throw new IllegalStateException(
+                    "未找到带 javac 的 JDK，请安装 JDK 17+ 或设置 JAVA_HOME。当前值: " + javaHome
+            );
         }
 
-        Process process = builder.start();
-        current.set(process);
-        log.info("Gradle started: task={}, pid={}", task, process.pid());
+        log.info("Gradle build start: task={}, dir={}", task, root);
+        // 让 Gradle 使用带 javac 的 JDK 启动 daemon（sidecar 自带的 jlink 运行时没有编译器）
+        System.setProperty("org.gradle.java.home", javaHome);
+        CancellationTokenSource cancellation = GradleConnector.newCancellationTokenSource();
+        // 在连接 Gradle 之前注册取消令牌，避免连接阶段点「停止」无效。
+        current.set(cancellation);
+        LineOutputStream output = new LineOutputStream(onLine);
+        GradleConnector connector = GradleConnector.newConnector()
+                .forProjectDirectory(root.toFile())
+                .useBuildDistribution();
 
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-            reader.lines().forEach(onLine);
-            return process.waitFor();
-        } catch (RuntimeException error) {
-            // 客户端断开等异常：确保构建进程被终止
-            stop();
-            throw error;
+        try (ProjectConnection connection = connector.connect()) {
+            if (current.get() != cancellation) {
+                log.info("Gradle build cancelled during connection");
+                return 130;
+            }
+            BuildLauncher launcher = connection.newBuild();
+            launcher.forTasks(task);
+            launcher.withArguments("--console=plain", "-q");
+            launcher.withCancellationToken(cancellation.token());
+            launcher.setStandardOutput(output);
+            launcher.setStandardError(output);
+            launcher.run();
+            return 0;
+        } catch (BuildCancelledException cancelled) {
+            log.info("Gradle build cancelled");
+            return 130;
+        } catch (BuildException failure) {
+            log.warn("Gradle build failed: {}", failure.getMessage());
+            return 1;
         } finally {
-            current.compareAndSet(process, null);
+            // Tooling API 未必关闭输出流；主动冲刷，避免丢失最后一条无换行输出
+            output.flush();
+            current.compareAndSet(cancellation, null);
         }
     }
 
     public boolean stop() {
-        Process process = current.getAndSet(null);
-        if (process == null) {
+        CancellationTokenSource cancellation = current.getAndSet(null);
+        if (cancellation == null) {
             return false;
         }
-        process.descendants().forEach(ProcessHandle::destroyForcibly);
-        process.destroyForcibly();
-        log.info("Gradle stopped: pid={}", process.pid());
+        cancellation.cancel();
         return true;
+    }
+
+    /** 把 Tooling API 的字节流按行切分并回调，避免整段缓冲 */
+    private static final class LineOutputStream extends OutputStream {
+
+        private final Consumer<String> onLine;
+        private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+
+        private LineOutputStream(Consumer<String> onLine) {
+            this.onLine = onLine;
+        }
+
+        @Override
+        public synchronized void write(int value) {
+            buffer.write(value);
+            drain();
+        }
+
+        @Override
+        public synchronized void write(byte[] data, int offset, int length) {
+            buffer.write(data, offset, length);
+            drain();
+        }
+
+        @Override
+        public synchronized void flush() {
+            if (buffer.size() > 0) {
+                onLine.accept(new String(buffer.toByteArray(), StandardCharsets.UTF_8));
+                buffer.reset();
+            }
+        }
+
+        private void drain() {
+            byte[] data = buffer.toByteArray();
+            int start = 0;
+            for (int i = 0; i < data.length; i++) {
+                if (data[i] != '\n') {
+                    continue;
+                }
+                String line = new String(data, start, i - start, StandardCharsets.UTF_8);
+                if (line.endsWith("\r")) {
+                    line = line.substring(0, line.length() - 1);
+                }
+                onLine.accept(line);
+                start = i + 1;
+            }
+            buffer.reset();
+            if (start < data.length) {
+                buffer.write(data, start, data.length - start);
+            }
+        }
     }
 }

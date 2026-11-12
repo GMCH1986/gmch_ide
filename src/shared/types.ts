@@ -15,6 +15,7 @@ export interface WorkspaceInfo {
 export interface FileEntry {
   path: string
   name: string
+  binary: boolean
 }
 
 export interface EnvInfo {

@@ -59,7 +59,8 @@ const child = spawn(
     jar,
     `--server.port=${port}`,
     `--app.token=${token}`,
-    `--app.workspace=${workspace}`
+    `--app.workspace=${workspace}`,
+    ...(javaHome ? [`--app.java-home=${javaHome}`] : [])
   ],
   { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: childEnv }
 )
@@ -97,11 +98,20 @@ async function main() {
   else console.log('[smoke] auth ok (401 without token)')
 
   const headers = { 'X-GMCH-Token': token }
+  const traversal = await fetch(`${base}/api/file?path=..%2Foutside.txt`, { headers })
+  if (traversal.status !== 400) fail(`路径越界应返回 400，实际 ${traversal.status}`)
+  else console.log('[smoke] path traversal blocked')
+
   const files = await (await fetch(`${base}/api/files`, { headers })).json()
   if (!files.some((file) => file.path.endsWith('Main.java'))) fail('文件列表缺少 Main.java')
   else console.log(`[smoke] files ok (${files.length} entries)`)
+  const wrapperJar = files.find((file) => file.path.endsWith('gradle-wrapper.jar'))
+  if (!wrapperJar || wrapperJar.binary !== true) fail('文件列表未正确标记二进制产物')
+  else console.log('[smoke] binary file metadata ok')
 
-  const source = await (await fetch(`${base}/api/file?path=src%2Fmain%2Fjava%2FMain.java`, { headers })).text()
+  const source = await (
+    await fetch(`${base}/api/file?path=src%2Fmain%2Fjava%2FMain.java`, { headers })
+  ).text()
   if (!source.includes('class Main')) fail('文件内容不正确')
   else console.log('[smoke] read file ok')
 
@@ -116,6 +126,11 @@ async function main() {
   } else {
     console.log('[smoke] compileJava ok (exit 0)')
   }
+
+  const afterBuild = await (await fetch(`${base}/api/files`, { headers })).json()
+  const compiled = afterBuild.find((file) => file.path === 'build/classes/java/main/Main.class')
+  if (!compiled || compiled.binary !== true) fail('编译后未在文件树数据中找到 Main.class')
+  else console.log('[smoke] build artifacts visible')
 }
 
 try {

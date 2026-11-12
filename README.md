@@ -8,7 +8,7 @@
 
 | 层 | 选型 |
 | --- | --- |
-| 桌面壳 | Electron 39 + electron-vite 5 |
+| 桌面壳 | Electron 44 + electron-vite 5 |
 | UI | Vue 3.5 + Pinia |
 | 编辑器 | CodeMirror 6（Java 语法高亮） |
 | 后端 | Spring Boot 3.5（Java sidecar） |

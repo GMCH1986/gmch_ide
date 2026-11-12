@@ -10,13 +10,18 @@ const api = {
 
   getInfo: (): Promise<AppInfo> => ipcRenderer.invoke('app:get-info'),
   getBackend: (): Promise<BackendInfo> => ipcRenderer.invoke('app:backend'),
+  restartBackend: (): Promise<BackendInfo> => ipcRenderer.invoke('app:backend-restart'),
   getWorkspace: (): Promise<WorkspaceInfo | null> => ipcRenderer.invoke('workspace:get'),
+  listRecentWorkspaces: (): Promise<WorkspaceInfo[]> => ipcRenderer.invoke('workspace:recent'),
+  openWorkspace: (path: string): Promise<WorkspaceInfo | null> =>
+    ipcRenderer.invoke('workspace:open', path),
   pickWorkspace: (): Promise<WorkspaceInfo | null> => ipcRenderer.invoke('workspace:pick'),
   pickDirectory: (): Promise<string | null> => ipcRenderer.invoke('workspace:pick-directory'),
 
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:open-external', url),
   reveal: (path: string): Promise<void> => ipcRenderer.invoke('shell:reveal', path),
   closeWindow: (): Promise<void> => ipcRenderer.invoke('app:close'),
+  cancelClose: (): Promise<void> => ipcRenderer.invoke('app:close-cancel'),
 
   onMenuAction: (callback: (action: MenuAction) => void): (() => void) => {
     const listener = (_event: unknown, action: MenuAction): void => callback(action)

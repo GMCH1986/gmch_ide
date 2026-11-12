@@ -3,6 +3,7 @@ import { nextTick, ref, watch } from 'vue'
 
 const props = defineProps<{
   lines: string[]
+  version: number
   running: boolean
 }>()
 
@@ -15,8 +16,9 @@ const body = ref<HTMLPreElement>()
 let follow = true
 
 watch(
-  () => props.lines.length,
+  () => props.version,
   async () => {
+    if (props.lines.length === 0) follow = true
     if (!follow) return
     await nextTick()
     const element = body.value

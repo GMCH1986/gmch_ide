@@ -15,10 +15,14 @@ java {
 
 repositories {
     mavenCentral()
+    // Gradle Tooling API 只发布在 Gradle 自己的仓库
+    maven { url = uri('https://repo.gradle.org/gradle/libs-releases') }
 }
 
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
+    // 用 Tooling API 在进程内驱动 Gradle，避免 cmd.exe 控制台窗口闪窗
+    implementation 'org.gradle:gradle-tooling-api:8.12'
 }
 
 tasks.named('bootJar') {

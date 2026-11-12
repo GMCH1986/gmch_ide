@@ -33,6 +33,7 @@ import java.util.stream.Stream;
 public class ProjectApi {
 
     private static final Pattern PROJECT_NAME = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,63}");
+    private static final Pattern JAVA_VERSION = Pattern.compile("^JAVA_VERSION=\"(?:1\\.)?(\\d+)", Pattern.MULTILINE);
     private static final List<String> GRADLE_VERSIONS = List.of("8.12", "8.5", "7.6");
     private static final String DEFAULT_NAME = "hello-java";
     private static final String DEFAULT_GRADLE_VERSION = "8.12";
@@ -70,10 +71,16 @@ public class ProjectApi {
 
     private final Workspace workspace;
     private final String configuredRoot;
+    private final int javaMajor;
 
-    public ProjectApi(Workspace workspace, @Value("${app.default-project-root:}") String configuredRoot) {
+    public ProjectApi(
+            Workspace workspace,
+            @Value("${app.default-project-root:}") String configuredRoot,
+            @Value("${app.java-home:}") String javaHome
+    ) {
         this.workspace = workspace;
         this.configuredRoot = configuredRoot;
+        this.javaMajor = detectJavaMajor(javaHome);
     }
 
     /** 默认工程目录、默认工程名与可选 Gradle 版本 */
@@ -83,7 +90,7 @@ public class ProjectApi {
         return Map.of(
                 "parentDir", parent.toString(),
                 "name", DEFAULT_NAME,
-                "gradleVersions", GRADLE_VERSIONS
+                "gradleVersions", GRADLE_VERSIONS.stream().filter(this::supportsGradle).toList()
         );
     }
 
@@ -102,6 +109,12 @@ public class ProjectApi {
                 : request.gradleVersion().trim();
         if (!GRADLE_VERSIONS.contains(gradleVersion)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "不支持的 Gradle 版本: " + gradleVersion);
+        }
+        if (!supportsGradle(gradleVersion)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Gradle " + gradleVersion + " 不支持当前 JDK " + javaMajor + "，请改用 JDK 17–19 或选择 Gradle 8.5+"
+            );
         }
 
         Path parent = resolveParent(request.parentDir());
@@ -137,6 +150,24 @@ public class ProjectApi {
             return Paths.get(configuredRoot).toAbsolutePath().normalize();
         }
         return Paths.get(System.getProperty("user.home")).resolve("GMCHProjects");
+    }
+
+    private boolean supportsGradle(String version) {
+        // Gradle 7.6 的最高受支持运行 JDK 是 19；20+ 会在启动 daemon 时失败
+        return !"7.6".equals(version) || javaMajor == 0 || javaMajor <= 19;
+    }
+
+    private int detectJavaMajor(String javaHome) {
+        if (javaHome == null || javaHome.isBlank()) {
+            return 0;
+        }
+        try {
+            String release = Files.readString(Path.of(javaHome, "release"), StandardCharsets.UTF_8);
+            var matcher = JAVA_VERSION.matcher(release);
+            return matcher.find() ? Integer.parseInt(matcher.group(1)) : 0;
+        } catch (IOException | NumberFormatException ignored) {
+            return 0;
+        }
     }
 
     private boolean isEmptyDirectory(Path path) throws IOException {

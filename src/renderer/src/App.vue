@@ -10,8 +10,22 @@ import StatusBar from './components/StatusBar.vue'
 import NewProjectDialog from './components/NewProjectDialog.vue'
 
 const ide = useIdeStore()
-const { backend, workspace, files, activePath, content, cursor, log, runStatus, busy, dirty, notice, showNewProject } =
-  storeToRefs(ide)
+const {
+  backend,
+  workspace,
+  recentWorkspaces,
+  files,
+  activePath,
+  content,
+  cursor,
+  log,
+  logVersion,
+  runStatus,
+  busy,
+  dirty,
+  notice,
+  showNewProject
+} = storeToRefs(ide)
 
 const backendLabel = computed(() => {
   switch (backend.value.status) {
@@ -32,8 +46,16 @@ function onCursor(line: number, col: number): void {
   ide.setCursor(line, col)
 }
 
+function revealWorkspace(path: string): void {
+  void window.api.reveal(path)
+}
+
 onMounted(() => {
   void ide.init()
+})
+
+const offBackendStatus = window.api.onBackendStatus((info) => {
+  ide.updateBackendStatus(info)
 })
 
 // 菜单快捷键统一由主进程分发，渲染层只做动作映射
@@ -47,16 +69,31 @@ const offMenu = window.api.onMenuAction((action: MenuAction) => {
 })
 
 // 关闭守卫：确认（并按需保存）之后再放行主进程关闭窗口
+let closePending = false
 const offClose = window.api.onCloseRequest(async () => {
-  if (dirty.value) {
-    const shouldSave = window.confirm('有未保存的修改，是否保存后退出？')
-    if (!shouldSave) return
-    if (!(await ide.save())) return
+  if (closePending) return
+  closePending = true
+  try {
+    if (dirty.value) {
+      const shouldSave = window.confirm('有未保存的修改，是否保存后退出？')
+      if (shouldSave) {
+        if (!(await ide.save())) {
+          await window.api.cancelClose()
+          return
+        }
+      } else if (!window.confirm('不保存将丢失当前修改，确定直接退出？')) {
+        await window.api.cancelClose()
+        return
+      }
+    }
+    await window.api.closeWindow()
+  } finally {
+    closePending = false
   }
-  await window.api.closeWindow()
 })
 
 onUnmounted(() => {
+  offBackendStatus()
   offMenu()
   offClose()
 })
@@ -69,7 +106,12 @@ onUnmounted(() => {
       <button class="tb-btn" @click="ide.pickWorkspace()">打开文件夹</button>
       <button class="tb-btn" @click="ide.openNewProject()">新建工程</button>
       <button class="tb-btn" :disabled="!activePath || !dirty" @click="ide.save()">保存</button>
-      <button class="tb-btn" :disabled="!workspace" title="刷新文件列表" @click="ide.refreshFiles()">
+      <button
+        class="tb-btn"
+        :disabled="!workspace"
+        title="刷新文件列表"
+        @click="ide.refreshFiles()"
+      >
         刷新
       </button>
       <span class="divider" />
@@ -84,27 +126,41 @@ onUnmounted(() => {
     </header>
 
     <aside class="sidebar">
-      <FileList :files="files" :active="activePath" @open="ide.openFile" />
+      <FileList
+        :files="files"
+        :active="activePath"
+        :workspace="workspace"
+        :recent-workspaces="recentWorkspaces"
+        :workspace-key="workspace?.path ?? null"
+        @open="ide.openFile"
+        @switch-workspace="ide.switchWorkspace"
+        @pick-workspace="ide.pickWorkspace"
+        @reveal-workspace="revealWorkspace"
+      />
     </aside>
 
     <main class="editor">
-      <CodeEditor
-        v-if="activePath"
-        v-model="content"
-        @cursor="onCursor"
-        @save="ide.save()"
-      />
+      <CodeEditor v-if="activePath" v-model="content" @cursor="onCursor" @save="ide.save()" />
       <div v-else class="empty">
         <h2>未打开文件</h2>
         <p v-if="backend.status !== 'ready'">{{ backend.message ?? '正在连接后端…' }}</p>
-        <p v-else-if="!workspace">打开一个目录开始：菜单「文件 → 打开文件夹」或 <kbd>Ctrl+O</kbd>。</p>
+        <p v-else-if="!workspace">
+          打开一个目录开始：菜单「文件 → 打开文件夹」或 <kbd>Ctrl+O</kbd>。
+        </p>
         <p v-else>从左侧选择一个文件。</p>
-        <button v-if="backend.status !== 'ready'" class="tb-btn" @click="ide.init()">重试连接</button>
+        <button
+          v-if="backend.status !== 'ready'"
+          class="tb-btn"
+          :disabled="backend.status === 'starting'"
+          @click="ide.retryBackend()"
+        >
+          重试连接
+        </button>
       </div>
     </main>
 
     <section class="output">
-      <OutputPanel :lines="log" :running="busy" @clear="ide.clearLog()" />
+      <OutputPanel :lines="log" :version="logVersion" :running="busy" @clear="ide.clearLog()" />
     </section>
 
     <footer class="status">

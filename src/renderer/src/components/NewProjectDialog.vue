@@ -7,7 +7,7 @@ const ide = useIdeStore()
 const name = ref('hello-java')
 const parentDir = ref('')
 const gradleVersion = ref('8.12')
-const versions = ref<string[]>(['8.12', '8.5', '7.6'])
+const versions = ref<string[]>(['8.12', '8.5'])
 const error = ref('')
 const busy = ref(false)
 

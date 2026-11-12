@@ -1,8 +1,24 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
-import { join } from 'path'
-import type { AppInfo, MenuAction, WorkspaceInfo } from '../shared/types'
-import { getBackendInfo, setWorkspacePath, startBackend, stopBackend } from './backend'
+import { execFileSync } from 'child_process'
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync
+} from 'fs'
+import { dirname, isAbsolute, join } from 'path'
+import type { AppInfo, BackendInfo, MenuAction, WorkspaceInfo } from '../shared/types'
+import {
+  getBackendInfo,
+  restartBackend,
+  setBackendStatusListener,
+  setWorkspacePath,
+  startBackend,
+  stopBackend
+} from './backend'
 
 /**
  * 启动诊断日志：写到 %APPDATA%\gmch-ide\startup.log。
@@ -21,6 +37,75 @@ function bootLog(message: string): void {
 
 bootLog(`boot pid=${process.pid} argv=${process.argv.slice(1).join(' ')}`)
 
+/**
+ * 找到一个「带编译器」的 JDK（不是 JRE）：Gradle 构建需要 javac。
+ * 优先 JAVA_HOME，其次常见安装目录，最后 PATH 上的 javac。
+ */
+function resolveJavaHome(): string | null {
+  const isWin = process.platform === 'win32'
+  const javacName = isWin ? 'javac.exe' : 'javac'
+  const hasCompiler = (home: string): boolean => existsSync(join(home, 'bin', javacName))
+  const compilerMajor = (home: string): number | null => {
+    try {
+      const release = readFileSync(join(home, 'release'), 'utf-8')
+      const match = release.match(/^JAVA_VERSION="(?:1\.)?(\d+)/m)
+      return match ? Number(match[1]) : null
+    } catch {
+      return null
+    }
+  }
+
+  const candidates: string[] = []
+  if (process.env.JAVA_HOME) candidates.push(process.env.JAVA_HOME)
+
+  const roots = [
+    // 开发环境与 doctor/build 脚本共用仓库内便携 JDK
+    join(app.getAppPath(), '.tools'),
+    ...(isWin
+      ? [
+          'C:\\Program Files\\Java',
+          'C:\\Program Files\\Eclipse Adoptium',
+          'C:\\Program Files\\Microsoft',
+          'C:\\Program Files\\Zulu',
+          join(process.env.USERPROFILE ?? '', '.jdks')
+        ]
+      : [])
+  ]
+  for (const root of roots) {
+    try {
+      for (const name of readdirSync(root)) candidates.push(join(root, name))
+    } catch {
+      // 目录不存在时忽略
+    }
+  }
+
+  for (const home of candidates) {
+    const major = compilerMajor(home)
+    if (hasCompiler(home) && (major === null || major >= 17)) return home
+  }
+
+  try {
+    const command = isWin ? 'where.exe' : 'which'
+    const output = execFileSync(command, ['javac'], { encoding: 'utf-8', timeout: 3000 })
+    const first = output
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean)
+    if (first) {
+      const home = dirname(dirname(first))
+      const major = compilerMajor(home)
+      if (hasCompiler(home) && (major === null || major >= 17)) return home
+    }
+  } catch {
+    // PATH 上没有 javac
+  }
+
+  return null
+}
+
+const javaHome = resolveJavaHome()
+bootLog(`jdk=${javaHome ?? 'not-found'}`)
+
 process.on('uncaughtException', (error) => {
   bootLog(`uncaught: ${error.stack ?? error.message}`)
   dialog.showErrorBox('GMCH IDE 启动失败', error.stack ?? error.message)
@@ -32,11 +117,14 @@ process.on('unhandledRejection', (reason) => {
 })
 
 app.on('child-process-gone', (_event, details) => {
-  bootLog(`child-process-gone type=${details.type} reason=${details.reason} exitCode=${details.exitCode}`)
+  bootLog(
+    `child-process-gone type=${details.type} reason=${details.reason} exitCode=${details.exitCode}`
+  )
 })
 
 interface Settings {
   workspace: string | null
+  recentWorkspaces?: string[]
 }
 
 interface WindowState {
@@ -51,6 +139,7 @@ const DEFAULT_WINDOW: WindowState = { width: 1280, height: 800 }
 
 let mainWindow: BrowserWindow | null = null
 let workspace: string | null = null
+let recentWorkspaces: string[] = []
 /** 关闭守卫放行标志：为真时窗口可以直接关闭 */
 let allowClose = false
 /** 关闭守卫等待渲染进程确认的兜底定时器 */
@@ -87,10 +176,52 @@ function writeJson(file: string, data: unknown): void {
   }
 }
 
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+function workspaceInfoFor(path: string): WorkspaceInfo {
+  const name = path.split(/[\\/]/).filter(Boolean).pop() ?? path
+  return { path, name }
+}
+
 function workspaceInfo(): WorkspaceInfo | null {
-  if (!workspace) return null
-  const name = workspace.split(/[\\/]/).filter(Boolean).pop() ?? workspace
-  return { path: workspace, name }
+  return workspace ? workspaceInfoFor(workspace) : null
+}
+
+function samePath(a: string, b: string): boolean {
+  return process.platform === 'win32'
+    ? a.localeCompare(b, undefined, { sensitivity: 'accent' }) === 0
+    : a === b
+}
+
+function availableRecentWorkspaces(): WorkspaceInfo[] {
+  return recentWorkspaces.filter(isDirectory).map(workspaceInfoFor)
+}
+
+function persistWorkspaceSettings(): void {
+  writeJson(settingsFile(), { workspace, recentWorkspaces })
+}
+
+function rememberWorkspace(path: string): void {
+  recentWorkspaces = [path, ...recentWorkspaces.filter((item) => !samePath(item, path))].slice(
+    0,
+    8
+  )
+}
+
+async function activateWorkspace(path: string): Promise<WorkspaceInfo | null> {
+  if (!isAbsolute(path) || !isDirectory(path)) return null
+  if (!(await setWorkspacePath(path))) return null
+
+  workspace = path
+  rememberWorkspace(path)
+  persistWorkspaceSettings()
+  return workspaceInfo()
 }
 
 function sendMenuAction(action: MenuAction): void {
@@ -287,6 +418,13 @@ function registerIpc(): void {
 
   ipcMain.handle('workspace:get', () => workspaceInfo())
 
+  ipcMain.handle('workspace:recent', () => availableRecentWorkspaces())
+
+  ipcMain.handle('workspace:open', async (_event, path: unknown): Promise<WorkspaceInfo | null> => {
+    if (typeof path !== 'string') return null
+    return activateWorkspace(path)
+  })
+
   ipcMain.handle('workspace:pick-directory', async (): Promise<string | null> => {
     if (!mainWindow) return null
     try {
@@ -318,14 +456,11 @@ function registerIpc(): void {
       bootLog(`pick-workspace: canceled=${result.canceled}`)
       if (result.canceled || !result.filePaths[0]) return null
 
-      const selected = result.filePaths[0]
-      if (!(await setWorkspacePath(selected))) {
+      const opened = await activateWorkspace(result.filePaths[0])
+      if (!opened) {
         dialog.showErrorBox('无法打开工作区', '后端未就绪或目录不可访问，请稍后重试。')
-        return null
       }
-      workspace = selected
-      writeJson(settingsFile(), { workspace })
-      return workspaceInfo()
+      return opened
     } catch (error) {
       bootLog(`pick-workspace failed: ${String(error)}`)
       return null
@@ -345,6 +480,14 @@ function registerIpc(): void {
     allowClose = true
     saveWindowState()
     mainWindow?.close()
+  })
+
+  ipcMain.handle('app:close-cancel', () => {
+    clearCloseGuardTimer()
+  })
+
+  ipcMain.handle('app:backend-restart', async (): Promise<BackendInfo> => {
+    return restartBackend(workspace, javaHome)
   })
 }
 
@@ -368,18 +511,25 @@ if (!gotLock) {
     app.setAppUserModelId('com.gmch.ide')
 
     const settings = readJson<Settings>(settingsFile(), { workspace: null })
-    workspace = settings.workspace && existsSync(settings.workspace) ? settings.workspace : null
+    workspace = settings.workspace && isDirectory(settings.workspace) ? settings.workspace : null
+    recentWorkspaces = (settings.recentWorkspaces ?? []).filter(
+      (path): path is string => typeof path === 'string' && isDirectory(path)
+    )
+    if (workspace) rememberWorkspace(workspace)
 
     buildMenu()
     registerIpc()
     createWindow()
     bootLog('window created')
 
-    void startBackend(workspace).then((info) => {
-      bootLog(`backend status=${info.status} ${info.message ?? ''}`)
-      if (mainWindow && !mainWindow.isDestroyed()) {
+    setBackendStatusListener((info) => {
+      if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
         mainWindow.webContents.send('backend:status', info)
       }
+    })
+
+    void startBackend(workspace, javaHome).then((info) => {
+      bootLog(`backend status=${info.status} ${info.message ?? ''}`)
     })
 
     app.on('activate', () => {
@@ -388,8 +538,10 @@ if (!gotLock) {
   })
 
   app.on('before-quit', () => {
-    allowClose = true
     saveWindowState()
+  })
+
+  app.on('will-quit', () => {
     stopBackend()
   })
 

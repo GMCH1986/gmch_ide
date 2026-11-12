@@ -5,7 +5,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 
 /**
@@ -30,7 +32,11 @@ public class Workspace {
         if (!Files.isDirectory(path)) {
             throw new IllegalArgumentException("工作区不存在: " + path);
         }
-        root = path;
+        try {
+            root = path.toRealPath();
+        } catch (IOException error) {
+            throw new IllegalArgumentException("工作区不可访问: " + path, error);
+        }
     }
 
     public Path root() {
@@ -50,6 +56,23 @@ public class Workspace {
         Path target = base.resolve(relative).normalize();
         if (!target.startsWith(base)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "路径越界");
+        }
+
+        // 词法路径仍在工作区内并不够：现有软链接/junction 可能指向目录外。
+        // 对最近一个已存在的祖先取真实路径，写入新文件时也能提前拦截越界目标。
+        Path probe = target;
+        while (!Files.exists(probe, LinkOption.NOFOLLOW_LINKS)) {
+            probe = probe.getParent();
+            if (probe == null || !probe.startsWith(base)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "路径越界");
+            }
+        }
+        try {
+            if (!probe.toRealPath().startsWith(base)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "路径越界");
+            }
+        } catch (IOException error) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "路径不可访问", error);
         }
         return target;
     }
