@@ -7,9 +7,10 @@ import FileList from './components/FileList.vue'
 import CodeEditor from './components/CodeEditor.vue'
 import OutputPanel from './components/OutputPanel.vue'
 import StatusBar from './components/StatusBar.vue'
+import NewProjectDialog from './components/NewProjectDialog.vue'
 
 const ide = useIdeStore()
-const { backend, workspace, files, activePath, content, cursor, log, runStatus, busy, dirty, notice } =
+const { backend, workspace, files, activePath, content, cursor, log, runStatus, busy, dirty, notice, showNewProject } =
   storeToRefs(ide)
 
 const backendLabel = computed(() => {
@@ -38,6 +39,7 @@ onMounted(() => {
 // 菜单快捷键统一由主进程分发，渲染层只做动作映射
 const offMenu = window.api.onMenuAction((action: MenuAction) => {
   if (action === 'open-workspace') void ide.pickWorkspace()
+  else if (action === 'new-project') ide.openNewProject()
   else if (action === 'save') void ide.save()
   else if (action === 'compile') void ide.run('compileJava')
   else if (action === 'run') void ide.run('run')
@@ -65,6 +67,7 @@ onUnmounted(() => {
     <header class="toolbar">
       <span class="brand">GMCH IDE</span>
       <button class="tb-btn" @click="ide.pickWorkspace()">打开文件夹</button>
+      <button class="tb-btn" @click="ide.openNewProject()">新建工程</button>
       <button class="tb-btn" :disabled="!activePath || !dirty" @click="ide.save()">保存</button>
       <button class="tb-btn" :disabled="!workspace" title="刷新文件列表" @click="ide.refreshFiles()">
         刷新
@@ -113,5 +116,7 @@ onUnmounted(() => {
         :backend="backend"
       />
     </footer>
+
+    <NewProjectDialog v-if="showNewProject" />
   </div>
 </template>

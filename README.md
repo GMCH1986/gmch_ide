@@ -67,6 +67,7 @@ npm run dev
 | 类型检查 + 三段构建（`out/`） | ✅ |
 | sidecar 构建（20MB jar + jlink 运行时） | ✅ |
 | 健康检查 / 鉴权 / 文件 API / SSE 编译 | ✅ `npm run smoke:backend` |
+| 新建工程（Gradle + Hello World） | ✅ 后端 API 实测；UI 对话框已渲染 |
 | Windows 解包产物（`dist/win-unpacked`） | ✅ |
 | Windows NSIS 安装包 | ✅ `dist/gmch-ide-0.1.0-setup.exe`（166 MB） |
 | Windows 免安装包 | ✅ `dist/GMCH IDE-0.1.0-win.zip`（201 MB） |

@@ -12,6 +12,7 @@ const api = {
   getBackend: (): Promise<BackendInfo> => ipcRenderer.invoke('app:backend'),
   getWorkspace: (): Promise<WorkspaceInfo | null> => ipcRenderer.invoke('workspace:get'),
   pickWorkspace: (): Promise<WorkspaceInfo | null> => ipcRenderer.invoke('workspace:pick'),
+  pickDirectory: (): Promise<string | null> => ipcRenderer.invoke('workspace:pick-directory'),
 
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:open-external', url),
   reveal: (path: string): Promise<void> => ipcRenderer.invoke('shell:reveal', path),

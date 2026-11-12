@@ -109,6 +109,11 @@ function buildMenu(): void {
           accelerator: 'CmdOrCtrl+O',
           click: (): void => sendMenuAction('open-workspace')
         },
+        {
+          label: '新建工程…',
+          accelerator: 'CmdOrCtrl+Shift+N',
+          click: (): void => sendMenuAction('new-project')
+        },
         { label: '保存', accelerator: 'CmdOrCtrl+S', click: (): void => sendMenuAction('save') },
         { type: 'separator' },
         isMac ? { role: 'close' } : { role: 'quit' }
@@ -281,6 +286,15 @@ function registerIpc(): void {
   ipcMain.handle('app:backend', () => getBackendInfo())
 
   ipcMain.handle('workspace:get', () => workspaceInfo())
+
+  ipcMain.handle('workspace:pick-directory', async (): Promise<string | null> => {
+    if (!mainWindow) return null
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: '选择工程存放目录',
+      properties: ['openDirectory', 'createDirectory']
+    })
+    return result.canceled ? null : (result.filePaths[0] ?? null)
+  })
 
   ipcMain.handle('workspace:pick', async (): Promise<WorkspaceInfo | null> => {
     if (!mainWindow) return null

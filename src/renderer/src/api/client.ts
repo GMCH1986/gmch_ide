@@ -95,3 +95,38 @@ export function runTask(task: RunTask, handlers: RunHandlers): () => void {
 export async function stopRun(): Promise<void> {
   await fetch(endpoint('/api/run/stop'), { method: 'POST', headers: headers() })
 }
+
+export interface ProjectDefaults {
+  parentDir: string
+  name: string
+  gradleVersions: string[]
+}
+
+export async function getProjectDefaults(): Promise<ProjectDefaults> {
+  return parse<ProjectDefaults>(
+    await fetch(endpoint('/api/project/defaults'), { headers: headers() })
+  )
+}
+
+export async function createProject(input: {
+  parentDir: string
+  name: string
+  gradleVersion: string
+}): Promise<{ path: string; name: string }> {
+  const response = await fetch(endpoint('/api/project'), {
+    method: 'POST',
+    headers: { ...headers(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input)
+  })
+  if (!response.ok) {
+    let message = `创建失败：${response.status}`
+    try {
+      const data = (await response.json()) as { message?: string }
+      if (data.message) message = data.message
+    } catch {
+      // 非 JSON 错误体，保留状态码
+    }
+    throw new Error(message)
+  }
+  return (await response.json()) as { path: string; name: string }
+}

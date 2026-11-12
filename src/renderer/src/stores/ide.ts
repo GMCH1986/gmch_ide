@@ -15,6 +15,7 @@ export const useIdeStore = defineStore('ide', () => {
   const runStatus = ref<RunStatus>('idle')
   const busy = ref(false)
   const notice = ref('')
+  const showNewProject = ref(false)
 
   const dirty = computed(() => content.value !== savedContent.value)
   const activeFile = computed(
@@ -152,6 +153,52 @@ export const useIdeStore = defineStore('ide', () => {
     cursor.value = { line, col }
   }
 
+  function openNewProject(): void {
+    showNewProject.value = true
+  }
+
+  function closeNewProject(): void {
+    showNewProject.value = false
+  }
+
+  async function loadProjectDefaults(): Promise<api.ProjectDefaults | null> {
+    try {
+      return await api.getProjectDefaults()
+    } catch (error) {
+      notice.value = error instanceof Error ? error.message : '无法读取默认工程目录'
+      return null
+    }
+  }
+
+  /**
+   * 新建 Gradle Java 工程。后端负责生成工程与 Wrapper 并把工作区切过去，
+   * 这里只刷新文件列表并打开 Main.java。
+   * @returns 失败时的错误信息；成功返回 null
+   */
+  async function createProject(input: {
+    parentDir: string
+    name: string
+    gradleVersion: string
+  }): Promise<string | null> {
+    try {
+      const created = await api.createProject(input)
+      workspace.value = { path: created.path, name: created.name }
+      activePath.value = null
+      content.value = ''
+      savedContent.value = ''
+      await refreshFiles()
+
+      const main = files.value.find((file) => file.path.endsWith('Main.java'))
+      if (main) await openFile(main.path)
+
+      showNewProject.value = false
+      notice.value = `已创建工程 ${created.name}`
+      return null
+    } catch (error) {
+      return error instanceof Error ? error.message : '创建工程失败'
+    }
+  }
+
   return {
     backend,
     workspace,
@@ -166,6 +213,7 @@ export const useIdeStore = defineStore('ide', () => {
     notice,
     dirty,
     activeFile,
+    showNewProject,
     init,
     refreshFiles,
     openFile,
@@ -174,6 +222,10 @@ export const useIdeStore = defineStore('ide', () => {
     run,
     stop,
     clearLog,
-    setCursor
+    setCursor,
+    openNewProject,
+    closeNewProject,
+    loadProjectDefaults,
+    createProject
   }
 })

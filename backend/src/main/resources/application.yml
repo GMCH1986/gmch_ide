@@ -2,6 +2,9 @@ server:
   # 只监听本机回环地址，端口由 Electron 主进程通过启动参数指定
   address: 127.0.0.1
   port: 0
+  error:
+    # 让 4xx 的校验消息（如工程名非法）能回传给界面
+    include-message: always
 
 spring:
   main:
@@ -20,3 +23,5 @@ app:
   workspace: ''
   # 用户 JDK 路径（Electron 主进程从 JAVA_HOME 传入），供 Gradle 编译使用
   java-home: ''
+  # 新建工程的默认父目录；留空时使用 <用户目录>/GMCHProjects
+  default-project-root: ''

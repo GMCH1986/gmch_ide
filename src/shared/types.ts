@@ -30,7 +30,7 @@ export interface AppInfo {
   backend: BackendInfo
 }
 
-export type MenuAction = 'open-workspace' | 'save' | 'compile' | 'run' | 'stop'
+export type MenuAction = 'open-workspace' | 'new-project' | 'save' | 'compile' | 'run' | 'stop'
 
 export type RunTask = 'compileJava' | 'run'
 
