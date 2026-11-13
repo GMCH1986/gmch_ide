@@ -85,6 +85,16 @@ kbd {
   border-color: rgba(108, 155, 255, 0.45);
 }
 
+.tb-btn.primary:not(:disabled) {
+  border-color: rgba(108, 155, 255, 0.42);
+  background: rgba(108, 155, 255, 0.12);
+  color: #dce7ff;
+}
+
+.tb-btn.primary:hover:not(:disabled) {
+  background: rgba(108, 155, 255, 0.22);
+}
+
 .tb-btn:disabled {
   opacity: 0.4;
   cursor: default;

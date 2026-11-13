@@ -36,3 +36,46 @@ export type MenuAction = 'open-workspace' | 'new-project' | 'save' | 'compile' |
 export type RunTask = 'compileJava' | 'run'
 
 export type RunStatus = 'idle' | 'running' | 'success' | 'failed'
+
+export type ServiceState =
+  | 'idle'
+  | 'building'
+  | 'starting'
+  | 'ready'
+  | 'stopping'
+  | 'stopped'
+  | 'failed'
+
+export interface ServiceStatus {
+  id: string
+  name: string
+  state: ServiceState
+  readyUrl?: string
+  openUrl?: string
+  message?: string
+  log: string[]
+}
+
+export interface ServicesStatus {
+  configured: boolean
+  name: string
+  path: string | null
+  running: boolean
+  stopping: boolean
+  previewUrl?: string | null
+  message?: string
+  services: ServiceStatus[]
+}
+
+export interface ServiceStateEvent {
+  serviceId: string
+  state: ServiceState
+  message?: string
+  readyUrl?: string
+  openUrl?: string
+}
+
+export interface ServiceLogEvent {
+  serviceId: string
+  line: string
+}

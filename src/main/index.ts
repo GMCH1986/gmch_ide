@@ -17,7 +17,8 @@ import {
   setBackendStatusListener,
   setWorkspacePath,
   startBackend,
-  stopBackend
+  stopBackend,
+  stopWorkspaceServices
 } from './backend'
 
 /**
@@ -475,8 +476,13 @@ function registerIpc(): void {
     if (typeof path === 'string' && existsSync(path)) shell.showItemInFolder(path)
   })
 
-  ipcMain.handle('app:close', () => {
+  ipcMain.handle('app:close', async () => {
     clearCloseGuardTimer()
+    try {
+      await stopWorkspaceServices()
+    } catch (error) {
+      bootLog(`stop services before close failed: ${String(error)}`)
+    }
     allowClose = true
     saveWindowState()
     mainWindow?.close()

@@ -21,6 +21,7 @@ const MODULES = [
   'java.naming',
   'java.management',
   'java.instrument',
+  'java.net.http',
   'java.security.jgss',
   'java.sql',
   'java.desktop',

@@ -184,6 +184,16 @@ export function stopBackend(): void {
   timer.unref()
 }
 
+/** 关闭 IDE 前先请求后端优雅停止全部服务及完整进程树。 */
+export async function stopWorkspaceServices(timeoutMs = 15_000): Promise<void> {
+  if (current.status !== 'ready' || !current.url || !current.token) return
+  await fetch(`${current.url}/api/services/stop`, {
+    method: 'POST',
+    headers: { 'X-GMCH-Token': current.token },
+    signal: AbortSignal.timeout(timeoutMs)
+  })
+}
+
 /** 重新启动已退出或启动失败的 sidecar；旧进程事件由 child 身份检查隔离 */
 export async function restartBackend(
   workspace: string | null,

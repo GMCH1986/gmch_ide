@@ -5,10 +5,13 @@ const props = defineProps<{
   lines: string[]
   version: number
   running: boolean
+  selected: string
+  tabs: Array<{ id: string; label: string; state: string }>
 }>()
 
 const emit = defineEmits<{
   clear: []
+  select: [id: string]
 }>()
 
 const body = ref<HTMLPreElement>()
@@ -36,7 +39,22 @@ function onScroll(): void {
 <template>
   <div class="output-panel">
     <div class="output-head">
-      <span>输出</span>
+      <span class="output-title">输出</span>
+      <div class="output-tabs" role="tablist" aria-label="输出服务">
+        <button
+          v-for="tab in tabs"
+          :key="tab.id"
+          type="button"
+          class="output-tab"
+          :class="{ active: selected === tab.id }"
+          role="tab"
+          :aria-selected="selected === tab.id"
+          @click="emit('select', tab.id)"
+        >
+          <span class="state-dot" :class="tab.state" />
+          {{ tab.label }}
+        </button>
+      </div>
       <span v-if="running" class="running">运行中…</span>
       <span class="flex" />
       <button class="link-btn" @click="emit('clear')">清空</button>
@@ -57,20 +75,79 @@ function onScroll(): void {
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 28px;
-  padding: 0 12px;
+  min-height: 30px;
+  padding: 0 10px;
   font-size: 11px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
   color: var(--muted);
   border-bottom: 1px solid var(--border);
 }
+.output-title {
+  flex: 0 0 auto;
+  letter-spacing: 0.08em;
+}
+.output-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+}
+.output-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.output-tab:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+.output-tab.active {
+  border-color: rgba(108, 155, 255, 0.28);
+  background: rgba(108, 155, 255, 0.1);
+  color: var(--text);
+}
+.state-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #666a76;
+}
+.state-dot.building,
+.state-dot.starting,
+.state-dot.running {
+  background: var(--accent);
+  box-shadow: 0 0 5px rgba(108, 155, 255, 0.5);
+}
+.state-dot.ready,
+.state-dot.success {
+  background: var(--ok);
+}
+.state-dot.failed {
+  background: var(--err);
+}
+.state-dot.stopping {
+  background: #d7a85f;
+}
 .running {
+  flex: 0 0 auto;
   color: var(--accent);
 }
 .flex {
   flex: 1;
 }
 .link-btn {
+  flex: 0 0 auto;
   border: none;
   background: none;
   color: var(--muted);

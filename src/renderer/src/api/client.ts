@@ -1,4 +1,11 @@
-import type { EnvInfo, FileEntry, RunTask } from '../../../shared/types'
+import type {
+  EnvInfo,
+  FileEntry,
+  RunTask,
+  ServiceLogEvent,
+  ServicesStatus,
+  ServiceStateEvent
+} from '../../../shared/types'
 
 interface Connection {
   url: string
@@ -94,6 +101,65 @@ export function runTask(task: RunTask, handlers: RunHandlers): () => void {
 
 export async function stopRun(): Promise<void> {
   await fetch(endpoint('/api/run/stop'), { method: 'POST', headers: headers() })
+}
+
+export async function getServicesStatus(): Promise<ServicesStatus> {
+  return parse<ServicesStatus>(
+    await fetch(endpoint('/api/services'), { headers: headers() })
+  )
+}
+
+export async function startServices(): Promise<ServicesStatus> {
+  const response = await fetch(endpoint('/api/services/start'), {
+    method: 'POST',
+    headers: headers()
+  })
+  if (!response.ok) {
+    let message = `启动全栈失败：${response.status}`
+    try {
+      const data = (await response.json()) as { message?: string }
+      if (data.message) message = data.message
+    } catch {
+      // 非 JSON 错误体，保留状态码
+    }
+    throw new Error(message)
+  }
+  return (await response.json()) as ServicesStatus
+}
+
+export async function stopServices(): Promise<ServicesStatus> {
+  return parse<ServicesStatus>(
+    await fetch(endpoint('/api/services/stop'), {
+      method: 'POST',
+      headers: headers()
+    })
+  )
+}
+
+export interface ServicesEventHandlers {
+  onSnapshot: (status: ServicesStatus) => void
+  onState: (event: ServiceStateEvent) => void
+  onLog: (event: ServiceLogEvent) => void
+  onError: () => void
+}
+
+/** 全栈运行事件流；EventSource 会自动重连，返回函数用于页面卸载时主动释放。 */
+export function subscribeServices(handlers: ServicesEventHandlers): () => void {
+  const source = new EventSource(endpoint('/api/services/events', true))
+  const parseEvent = <T>(event: Event): T => JSON.parse((event as MessageEvent<string>).data) as T
+
+  source.addEventListener('snapshot', (event) => {
+    handlers.onSnapshot(parseEvent<ServicesStatus>(event))
+  })
+  source.addEventListener('state', (event) => {
+    handlers.onState(parseEvent<ServiceStateEvent>(event))
+  })
+  source.addEventListener('log', (event) => {
+    handlers.onLog(parseEvent<ServiceLogEvent>(event))
+  })
+  source.onerror = (): void => handlers.onError()
+
+  return () => source.close()
 }
 
 export interface ProjectDefaults {

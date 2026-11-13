@@ -18,10 +18,16 @@ const {
   activePath,
   content,
   cursor,
-  log,
-  logVersion,
   runStatus,
   busy,
+  services,
+  selectedOutput,
+  stackActive,
+  outputRunning,
+  outputTabs,
+  outputLines,
+  outputVersion,
+  previewUrl,
   dirty,
   notice,
   showNewProject
@@ -96,6 +102,7 @@ onUnmounted(() => {
   offBackendStatus()
   offMenu()
   offClose()
+  ide.disposeServiceEvents()
 })
 </script>
 
@@ -115,10 +122,33 @@ onUnmounted(() => {
         刷新
       </button>
       <span class="divider" />
-      <button class="tb-btn" :disabled="!workspace || busy" @click="ide.run('compileJava')">
+      <button
+        class="tb-btn primary"
+        :disabled="!workspace || !services.configured || stackActive || busy"
+        :title="services.message ?? services.path ?? '读取 .gmch/run.json'"
+        @click="ide.startAllServices()"
+      >
+        启动全栈
+      </button>
+      <button class="tb-btn" :disabled="!stackActive" @click="ide.stopAllServices()">
+        停止全部
+      </button>
+      <button class="tb-btn" :disabled="!previewUrl" @click="ide.openPreview()">打开预览</button>
+      <span class="divider" />
+      <button
+        class="tb-btn"
+        :disabled="!workspace || busy || stackActive"
+        @click="ide.run('compileJava')"
+      >
         编译
       </button>
-      <button class="tb-btn" :disabled="!workspace || busy" @click="ide.run('run')">运行</button>
+      <button
+        class="tb-btn"
+        :disabled="!workspace || busy || stackActive"
+        @click="ide.run('run')"
+      >
+        运行
+      </button>
       <button class="tb-btn" :disabled="!busy" @click="ide.stop()">停止</button>
       <span class="flex" />
       <span class="notice">{{ notice }}</span>
@@ -160,7 +190,15 @@ onUnmounted(() => {
     </main>
 
     <section class="output">
-      <OutputPanel :lines="log" :version="logVersion" :running="busy" @clear="ide.clearLog()" />
+      <OutputPanel
+        :lines="outputLines"
+        :version="outputVersion"
+        :running="outputRunning"
+        :selected="selectedOutput"
+        :tabs="outputTabs"
+        @select="ide.selectOutput"
+        @clear="ide.clearOutput"
+      />
     </section>
 
     <footer class="status">
@@ -170,6 +208,7 @@ onUnmounted(() => {
         :cursor="cursor"
         :run-status="runStatus"
         :backend="backend"
+        :services="services"
       />
     </footer>
 
