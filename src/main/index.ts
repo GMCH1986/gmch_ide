@@ -242,7 +242,7 @@ function buildMenu(): void {
           click: (): void => sendMenuAction('open-workspace')
         },
         {
-          label: '新建工程…',
+          label: '新建项目…',
           accelerator: 'CmdOrCtrl+Shift+N',
           click: (): void => sendMenuAction('new-project')
         },
@@ -433,7 +433,7 @@ function registerIpc(): void {
       // 不传父窗口：Windows 上 Electron 解析父 HWND 存在已知崩溃（0xc000041d），
       // 参见 electron#45673 / PR#53583；无父窗口的对话框更稳定
       const result = await dialog.showOpenDialog({
-        title: '选择工程存放目录',
+        title: '选择项目存放目录',
         defaultPath: workspace ?? undefined,
         properties: ['openDirectory']
       })
@@ -450,7 +450,7 @@ function registerIpc(): void {
     try {
       bootLog('pick-workspace: opening dialog')
       const result = await dialog.showOpenDialog({
-        title: '选择 Gradle 工程目录',
+        title: '选择 Gradle 项目目录',
         defaultPath: workspace ?? undefined,
         properties: ['openDirectory']
       })
@@ -459,7 +459,7 @@ function registerIpc(): void {
 
       const opened = await activateWorkspace(result.filePaths[0])
       if (!opened) {
-        dialog.showErrorBox('无法打开工作区', '后端未就绪或目录不可访问，请稍后重试。')
+        dialog.showErrorBox('无法打开项目', '后端未就绪或目录不可访问，请稍后重试。')
       }
       return opened
     } catch (error) {

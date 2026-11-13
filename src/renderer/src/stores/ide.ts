@@ -2,12 +2,16 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import type {
   BackendInfo,
+  BuildToolCommand,
+  BuildToolModule,
+  BuildToolProject,
   FileEntry,
   RunStatus,
   RunTask,
   ServiceLogEvent,
   ServiceStateEvent,
   ServicesStatus,
+  StartupClassInfo,
   WorkspaceInfo
 } from '../../../shared/types'
 import * as api from '../api/client'
@@ -20,6 +24,7 @@ export const useIdeStore = defineStore('ide', () => {
   const backend = ref<BackendInfo>({ status: 'starting', url: null, token: null })
   const workspace = ref<WorkspaceInfo | null>(null)
   const recentWorkspaces = ref<WorkspaceInfo[]>([])
+  const recentFiles = ref<string[]>([])
   const files = ref<FileEntry[]>([])
   const activePath = ref<string | null>(null)
   const content = ref('')
@@ -42,16 +47,35 @@ export const useIdeStore = defineStore('ide', () => {
   const selectedOutput = ref('all')
   const notice = ref('')
   const showNewProject = ref(false)
+  const refreshingFiles = ref(false)
+  const startupClasses = ref<StartupClassInfo[]>([])
+  const startupScanning = ref(false)
+  const startupError = ref('')
+  const selectedStartupPath = ref<string | null>(null)
+  const buildTools = ref<BuildToolProject[]>([])
+  const buildToolsLoading = ref(false)
+  const buildToolsError = ref('')
+  const activeBuildCommandId = ref<string | null>(null)
 
   const dirty = computed(() => content.value !== savedContent.value)
   const activeFile = computed(
     () => files.value.find((file) => file.path === activePath.value) ?? null
+  )
+  const startupClass = computed(
+    () =>
+      startupClasses.value.find((item) => item.path === selectedStartupPath.value) ??
+      startupClasses.value[0] ??
+      null
   )
 
   let disposeRun: (() => void) | null = null
   let disposeServices: (() => void) | null = null
   let initializing = false
   let autoPreviewOpened = false
+  let refreshPromise: Promise<boolean> | null = null
+  let refreshFeedbackRequested = false
+  let startupScanId = 0
+  let buildToolScanId = 0
 
   const stackActive = computed(
     () =>
@@ -69,7 +93,7 @@ export const useIdeStore = defineStore('ide', () => {
       tabs.push({ id: service.id, label: service.name, state: service.state })
     }
     if (log.value.length > 0 || busy.value || runStatus.value !== 'idle') {
-      tabs.push({ id: 'gradle', label: '工程任务', state: runStatus.value })
+      tabs.push({ id: 'gradle', label: '构建任务', state: runStatus.value })
     }
     return tabs
   })
@@ -117,6 +141,38 @@ export const useIdeStore = defineStore('ide', () => {
       recentWorkspaces.value = await window.api.listRecentWorkspaces()
     } catch {
       recentWorkspaces.value = []
+    }
+  }
+
+  function recentFilesStorageKey(): string | null {
+    return workspace.value ? `gmch-ide:recent-files:${workspace.value.path}` : null
+  }
+
+  function loadRecentFiles(): void {
+    const key = recentFilesStorageKey()
+    if (!key) {
+      recentFiles.value = []
+      return
+    }
+    try {
+      const parsed = JSON.parse(localStorage.getItem(key) ?? '[]') as unknown
+      recentFiles.value = Array.isArray(parsed)
+        ? parsed.filter((item): item is string => typeof item === 'string').slice(0, 12)
+        : []
+    } catch {
+      recentFiles.value = []
+    }
+  }
+
+  function rememberRecentFile(filePath: string): void {
+    const next = [filePath, ...recentFiles.value.filter((item) => item !== filePath)].slice(0, 12)
+    recentFiles.value = next
+    const key = recentFilesStorageKey()
+    if (!key) return
+    try {
+      localStorage.setItem(key, JSON.stringify(next))
+    } catch {
+      // 最近文件只是导航加速项，存储不可用时不影响打开文件。
     }
   }
 
@@ -188,10 +244,13 @@ export const useIdeStore = defineStore('ide', () => {
   /** 工作区切换后的统一收尾：清空编辑状态、刷新树并打开首个 Java 文件。 */
   async function applyWorkspace(next: WorkspaceInfo): Promise<void> {
     workspace.value = next
+    clearStartupClasses()
+    clearBuildTools()
     activePath.value = null
     content.value = ''
     savedContent.value = ''
     await refreshFiles()
+    loadRecentFiles()
 
     const first = files.value.find((file) => file.path.endsWith('.java')) ?? files.value[0]
     if (first) await openFile(first.path)
@@ -215,9 +274,14 @@ export const useIdeStore = defineStore('ide', () => {
       connectServiceEvents()
       workspace.value = await window.api.getWorkspace()
       if (workspace.value) {
+        clearStartupClasses()
         await refreshFiles()
+        loadRecentFiles()
         const first = files.value.find((file) => file.path.endsWith('.java')) ?? files.value[0]
         if (first) await openFile(first.path)
+      } else {
+        clearStartupClasses()
+        clearBuildTools()
       }
       await loadServicesStatus()
       await loadRecentWorkspaces()
@@ -243,15 +307,148 @@ export const useIdeStore = defineStore('ide', () => {
     return !dirty.value || window.confirm('当前文件有未保存的修改，确定放弃并继续？')
   }
 
-  async function refreshFiles(): Promise<boolean> {
+  /** 清空旧项目的候选，并让仍在途的扫描结果自动失效。 */
+  function clearStartupClasses(): void {
+    startupScanId++
+    startupClasses.value = []
+    selectedStartupPath.value = null
+    startupScanning.value = false
+    startupError.value = ''
+  }
+
+  /**
+   * 自动扫描启动类。只读取源码，不需要先构建或安装项目。
+   * 请求带代次校验，切换项目时不会被上一个项目的慢扫描覆盖。
+   */
+  async function loadStartupClasses(): Promise<void> {
+    const currentWorkspace = workspace.value
+    if (!currentWorkspace) {
+      clearStartupClasses()
+      return
+    }
+
+    const requestId = ++startupScanId
+    startupScanning.value = true
+    startupError.value = ''
     try {
-      files.value = await api.listFiles()
-      return true
+      const result = await api.getStartupClasses()
+      if (requestId !== startupScanId || workspace.value?.path !== currentWorkspace.path) return
+
+      startupClasses.value = result.candidates
+      const selectedStillExists =
+        selectedStartupPath.value &&
+        result.candidates.some((candidate) => candidate.path === selectedStartupPath.value)
+      if (!selectedStillExists) selectedStartupPath.value = result.primary?.path ?? null
     } catch (error) {
-      files.value = []
-      notice.value = messageOf(error, '刷新文件列表失败')
+      if (requestId !== startupScanId || workspace.value?.path !== currentWorkspace.path) return
+      startupClasses.value = []
+      selectedStartupPath.value = null
+      startupError.value = messageOf(error, '启动类识别失败')
+    } finally {
+      if (requestId === startupScanId) startupScanning.value = false
+    }
+  }
+
+  function clearBuildTools(): void {
+    buildToolScanId++
+    buildTools.value = []
+    buildToolsLoading.value = false
+    buildToolsError.value = ''
+    activeBuildCommandId.value = null
+  }
+
+  /** 自动识别工作区中的 Maven/Gradle 工程；失败只影响右侧导航，不影响文件树。 */
+  async function loadBuildTools(showFeedback = false): Promise<boolean> {
+    const currentWorkspace = workspace.value
+    if (!currentWorkspace) {
+      clearBuildTools()
       return false
     }
+
+    const requestId = ++buildToolScanId
+    buildToolsLoading.value = true
+    buildToolsError.value = ''
+    if (showFeedback) notice.value = '正在识别 Maven / Gradle 工程…'
+    try {
+      const result = await api.getBuildTools()
+      if (requestId !== buildToolScanId || workspace.value?.path !== currentWorkspace.path) {
+        return false
+      }
+      buildTools.value = result.projects
+      if (showFeedback) {
+        notice.value = buildToolsSummary(result.projects, '构建工具刷新成功')
+      }
+      return true
+    } catch (error) {
+      if (requestId !== buildToolScanId || workspace.value?.path !== currentWorkspace.path) {
+        return false
+      }
+      buildTools.value = []
+      buildToolsError.value = messageOf(error, '构建工具识别失败')
+      if (showFeedback) notice.value = `构建工具刷新失败：${buildToolsError.value}`
+      return false
+    } finally {
+      if (requestId === buildToolScanId) buildToolsLoading.value = false
+    }
+  }
+
+  function buildToolsSummary(projects: BuildToolProject[], prefix: string): string {
+    if (projects.length === 0) return `${prefix}，未发现 Maven / Gradle 工程`
+    const maven = projects.filter((project) => project.system === 'maven').length
+    const gradle = projects.filter((project) => project.system === 'gradle').length
+    const parts = [
+      maven > 0 ? `Maven ${maven}` : '',
+      gradle > 0 ? `Gradle ${gradle}` : ''
+    ].filter(Boolean)
+    return `${prefix}，识别到 ${parts.join(' / ')} 工程`
+  }
+
+  function selectStartupClass(path: string): void {
+    if (startupClasses.value.some((candidate) => candidate.path === path)) {
+      selectedStartupPath.value = path
+    }
+  }
+
+  async function openStartupClass(path: string): Promise<void> {
+    selectStartupClass(path)
+    await openFile(path)
+  }
+
+  /** 重新扫描当前工作区；手动刷新会同步更新文件树、启动类和构建工具导航。 */
+  function refreshFiles(showFeedback = false): Promise<boolean> {
+    if (showFeedback) {
+      refreshFeedbackRequested = true
+      notice.value = '正在刷新文件、启动类和构建工具…'
+    }
+    if (refreshPromise) return refreshPromise
+
+    refreshingFiles.value = true
+    refreshPromise = (async () => {
+      try {
+        const [nextFiles, , buildToolsOk] = await Promise.all([
+          api.listFiles(),
+          loadStartupClasses(),
+          loadBuildTools()
+        ])
+        files.value = nextFiles
+        if (refreshFeedbackRequested) {
+          const fileSummary = `文件列表刷新成功，共 ${nextFiles.length} 个文件`
+          notice.value = buildToolsOk
+            ? `${fileSummary}；${buildToolsSummary(buildTools.value, '构建工具已同步')}`
+            : `${fileSummary}；构建工具识别失败，请查看右侧面板`
+        }
+        return true
+      } catch (error) {
+        files.value = []
+        notice.value = `刷新文件列表失败：${messageOf(error, '未知错误')}`
+        return false
+      } finally {
+        refreshingFiles.value = false
+        refreshFeedbackRequested = false
+        refreshPromise = null
+      }
+    })()
+    return refreshPromise
   }
 
   async function openFile(path: string): Promise<void> {
@@ -262,6 +459,7 @@ export const useIdeStore = defineStore('ide', () => {
       activePath.value = path
       content.value = text
       savedContent.value = text
+      rememberRecentFile(path)
     } catch (error) {
       notice.value = messageOf(error, `无法打开文件 ${path}`)
     }
@@ -282,7 +480,7 @@ export const useIdeStore = defineStore('ide', () => {
 
   async function pickWorkspace(): Promise<void> {
     if (busy.value || stackActive.value) {
-      notice.value = '请先停止当前任务或全栈服务再切换工作区'
+      notice.value = '请先停止当前任务或全栈服务再切换项目'
       return
     }
     if (!confirmDiscard()) return
@@ -295,7 +493,7 @@ export const useIdeStore = defineStore('ide', () => {
   async function switchWorkspace(path: string): Promise<void> {
     if (path === workspace.value?.path) return
     if (busy.value || stackActive.value) {
-      notice.value = '请先停止当前任务或全栈服务再切换工作区'
+      notice.value = '请先停止当前任务或全栈服务再切换项目'
       return
     }
     if (!confirmDiscard()) return
@@ -320,6 +518,92 @@ export const useIdeStore = defineStore('ide', () => {
     logVersion.value++
   }
 
+  function buildCommandPreview(task: RunTask): string {
+    const target = startupClass.value
+    if (target?.buildSystem === 'maven') {
+      const goal = task === 'run'
+        ? (target.springBoot ? 'package → java -jar' : 'exec:java')
+        : 'compile'
+      return `> Maven ${goal} · ${target.modulePath || '.'}`
+    }
+    if (target?.buildSystem === 'gradle') {
+      const goal = task === 'run' && target.springBoot ? 'bootRun' : task
+      return `> Gradle ${goal} · ${target.modulePath || '.'}`
+    }
+    return `> Java 构建任务 ${task}`
+  }
+
+  /** 执行右侧构建导航中被后端确认过的 Maven/Gradle 任务。 */
+  async function runBuildCommand(
+    project: BuildToolProject,
+    module: BuildToolModule,
+    command: BuildToolCommand
+  ): Promise<void> {
+    if (busy.value) return
+    if (stackActive.value) {
+      notice.value = '全栈服务运行中，请先停止全部服务'
+      return
+    }
+    if (!workspace.value) {
+      notice.value = '请先打开项目'
+      return
+    }
+    if (!command.executable) {
+      notice.value = command.disabledReason ?? '当前构建任务不可执行'
+      return
+    }
+
+    const systemLabel = project.system === 'maven' ? 'Maven' : 'Gradle'
+    const moduleLabel = module.path || '项目根目录'
+    selectedOutput.value = 'gradle'
+    busy.value = true
+    runStatus.value = 'running'
+    activeBuildCommandId.value = command.id
+    log.value = []
+    appendLog(`> ${systemLabel} · ${moduleLabel}`)
+    appendLog(`$ ${command.commandLine}`)
+
+    try {
+      disposeRun = api.runBuildCommand(
+        {
+          system: project.system,
+          projectPath: project.rootPath,
+          modulePath: module.path,
+          task: command.task
+        },
+        {
+          onLog: appendLog,
+          onExit: (code) => {
+            disposeRun = null
+            busy.value = false
+            activeBuildCommandId.value = null
+            runStatus.value = code === '0' ? 'success' : 'failed'
+            appendLog(`[进程退出，代码 ${code}]`)
+            notice.value = code === '0'
+              ? `${systemLabel} ${command.label} 执行成功`
+              : `${systemLabel} ${command.label} 执行失败`
+            // 构建会更新 target/build 等目录，完成后同步左侧文件树与构建导航。
+            void refreshFiles()
+          },
+          onError: () => {
+            disposeRun = null
+            busy.value = false
+            activeBuildCommandId.value = null
+            runStatus.value = 'failed'
+            appendLog('[输出连接中断]')
+            notice.value = `${systemLabel} ${command.label} 输出连接中断`
+          }
+        }
+      )
+    } catch (error) {
+      busy.value = false
+      activeBuildCommandId.value = null
+      runStatus.value = 'failed'
+      appendLog(`[无法启动构建：${messageOf(error, '后端未连接')}]`)
+      notice.value = messageOf(error, '无法启动构建任务')
+    }
+  }
+
   async function run(task: RunTask): Promise<void> {
     if (busy.value) return
     if (stackActive.value) {
@@ -327,23 +611,24 @@ export const useIdeStore = defineStore('ide', () => {
       return
     }
     if (!workspace.value) {
-      notice.value = '请先打开工作区'
+      notice.value = '请先打开项目'
       return
     }
 
+    selectedOutput.value = 'gradle'
     busy.value = true
     runStatus.value = 'running'
     log.value = []
-    appendLog(`> gradle ${task} --console=plain -q`)
+    appendLog(buildCommandPreview(task))
 
     try {
-      disposeRun = api.runTask(task, {
+      disposeRun = api.runTask(task, startupClass.value?.path ?? null, {
         onLog: appendLog,
         onExit: (code) => {
           busy.value = false
           runStatus.value = code === '0' ? 'success' : 'failed'
           appendLog(`[进程退出，代码 ${code}]`)
-          // Gradle 会更新 build 目录；任务结束后自动刷新文件树中的源码与产物。
+          // 构建工具会更新 build/target 目录；任务结束后刷新源码与产物。
           void refreshFiles()
         },
         onError: () => {
@@ -363,6 +648,7 @@ export const useIdeStore = defineStore('ide', () => {
     disposeRun?.()
     disposeRun = null
     busy.value = false
+    activeBuildCommandId.value = null
     runStatus.value = 'idle'
     try {
       await api.stopRun()
@@ -379,7 +665,7 @@ export const useIdeStore = defineStore('ide', () => {
       return
     }
     if (!workspace.value) {
-      notice.value = '请先打开工作区'
+      notice.value = '请先打开项目'
       return
     }
 
@@ -442,7 +728,7 @@ export const useIdeStore = defineStore('ide', () => {
 
   function openNewProject(): void {
     if (busy.value || stackActive.value) {
-      notice.value = '请先停止当前任务或全栈服务再新建工程'
+      notice.value = '请先停止当前任务或全栈服务再新建项目'
       return
     }
     if (!confirmDiscard()) return
@@ -457,13 +743,13 @@ export const useIdeStore = defineStore('ide', () => {
     try {
       return await api.getProjectDefaults()
     } catch (error) {
-      notice.value = messageOf(error, '无法读取默认工程目录')
+      notice.value = messageOf(error, '无法读取默认项目目录')
       return null
     }
   }
 
   /**
-   * 新建 Gradle Java 工程。后端负责生成工程与 Wrapper 并把工作区切过去，
+   * 新建 Gradle Java 项目。后端负责生成项目与 Wrapper 并把项目目录切过去，
    * 这里只刷新文件列表并打开 Main.java。
    * @returns 失败时的错误信息；成功返回 null
    */
@@ -472,26 +758,29 @@ export const useIdeStore = defineStore('ide', () => {
     name: string
     gradleVersion: string
   }): Promise<string | null> {
-    if (busy.value || stackActive.value) return '请先停止当前任务或全栈服务再新建工程'
+    if (busy.value || stackActive.value) return '请先停止当前任务或全栈服务再新建项目'
     try {
       const created = await api.createProject(input)
       const registered = await window.api.openWorkspace(created.path)
       workspace.value = registered ?? { path: created.path, name: created.name }
+      clearStartupClasses()
+      clearBuildTools()
       activePath.value = null
       content.value = ''
       savedContent.value = ''
       const refreshed = await refreshFiles()
-      if (!refreshed) return '工程已创建，但刷新文件列表失败'
+      if (!refreshed) return '项目已创建，但刷新文件列表失败'
 
       const main = files.value.find((file) => file.path.endsWith('Main.java'))
       if (main) await openFile(main.path)
       await loadRecentWorkspaces()
+      loadRecentFiles()
 
       showNewProject.value = false
-      notice.value = `已创建工程 ${created.name}`
+      notice.value = `已创建项目 ${created.name}`
       return null
     } catch (error) {
-      return messageOf(error, '创建工程失败')
+      return messageOf(error, '创建项目失败')
     }
   }
 
@@ -499,6 +788,7 @@ export const useIdeStore = defineStore('ide', () => {
     backend,
     workspace,
     recentWorkspaces,
+    recentFiles,
     files,
     activePath,
     content,
@@ -518,6 +808,15 @@ export const useIdeStore = defineStore('ide', () => {
     outputVersion,
     previewUrl,
     notice,
+    refreshingFiles,
+    startupClasses,
+    startupScanning,
+    startupError,
+    startupClass,
+    buildTools,
+    buildToolsLoading,
+    buildToolsError,
+    activeBuildCommandId,
     dirty,
     activeFile,
     showNewProject,
@@ -525,11 +824,17 @@ export const useIdeStore = defineStore('ide', () => {
     retryBackend,
     updateBackendStatus,
     refreshFiles,
+    loadBuildTools,
+    loadStartupClasses,
+    selectStartupClass,
+    openStartupClass,
     openFile,
     save,
     pickWorkspace,
     switchWorkspace,
     loadRecentWorkspaces,
+    loadRecentFiles,
+    runBuildCommand,
     run,
     stop,
     startAllServices,

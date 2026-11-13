@@ -79,3 +79,59 @@ export interface ServiceLogEvent {
   serviceId: string
   line: string
 }
+
+export interface StartupClassInfo {
+  className: string
+  packageName: string
+  path: string
+  springBoot: boolean
+  buildSystem: 'gradle' | 'maven' | 'unknown'
+  modulePath: string
+}
+
+export interface StartupClassesResult {
+  found: boolean
+  primary: StartupClassInfo | null
+  candidates: StartupClassInfo[]
+}
+
+export type BuildSystem = 'maven' | 'gradle'
+
+export interface BuildToolCommand {
+  id: string
+  label: string
+  task: string
+  description: string
+  executable: boolean
+  disabledReason: string | null
+  commandLine: string
+}
+
+export interface BuildToolModule {
+  id: string
+  name: string
+  path: string
+  taskPath: string
+  commands: BuildToolCommand[]
+}
+
+export interface BuildToolProject {
+  id: string
+  system: BuildSystem
+  label: string
+  rootPath: string
+  wrapper: string | null
+  wrapperAvailable: boolean
+  modules: BuildToolModule[]
+}
+
+export interface BuildToolsResult {
+  projects: BuildToolProject[]
+}
+
+export interface BuildCommandTarget {
+  system: BuildSystem
+  projectPath: string
+  modulePath: string
+  task: string
+}

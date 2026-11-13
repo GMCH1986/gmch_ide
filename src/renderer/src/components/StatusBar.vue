@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { BackendInfo, RunStatus, ServicesStatus } from '../../../shared/types'
+import type {
+  BackendInfo,
+  RunStatus,
+  ServicesStatus,
+  StartupClassInfo
+} from '../../../shared/types'
+import StartupClassPicker from './StartupClassPicker.vue'
 
 const props = defineProps<{
   workspace: { path: string; name: string } | null
@@ -9,14 +15,31 @@ const props = defineProps<{
   runStatus: RunStatus
   backend: BackendInfo
   services: ServicesStatus
+  startupClass: StartupClassInfo | null
+  startupClasses: StartupClassInfo[]
+  startupScanning: boolean
+  startupError: string
+}>()
+
+const emit = defineEmits<{
+  'open-startup-class': [path: string]
+  'rescan-startup': []
 }>()
 
 const runLabels: Record<RunStatus, string> = {
-  idle: '空闲',
-  running: '运行中',
+  idle: '任务空闲',
+  running: '构建运行中',
   success: '构建成功',
   failed: '构建失败'
 }
+
+const backendLabel = computed(() => {
+  if (props.backend.status === 'ready') return '后端就绪'
+  if (props.backend.status === 'starting') return '后端启动中'
+  if (props.backend.status === 'missing') return '后端未构建'
+  if (props.backend.status === 'error') return '后端异常'
+  return '后端已停止'
+})
 
 const stackState = computed(() => {
   const failed = props.services.services.some((service) => service.state === 'failed')
@@ -34,70 +57,184 @@ const stackState = computed(() => {
 </script>
 
 <template>
-  <div class="status-bar">
-    <span class="workspace">{{ workspace?.name ?? '未打开工作区' }}</span>
-    <span class="sep">|</span>
-    <span class="path" :title="path ?? ''">{{ path ?? '—' }}</span>
+  <div class="status-bar" aria-label="IDE 状态">
+    <span class="workspace" :title="workspace?.path ?? ''">
+      <span class="workspace-mark" aria-hidden="true" />
+      {{ workspace?.name ?? '未打开项目' }}
+    </span>
+    <span class="path" :title="path ?? ''">{{ path ?? '未选择文件' }}</span>
     <span class="flex" />
-    <span>Ln {{ cursor.line }}, Col {{ cursor.col }}</span>
-    <span class="sep">|</span>
-    <span :class="['run', runStatus]">{{ runLabels[runStatus] }}</span>
-    <span class="sep">|</span>
-    <span :class="['stack', stackState.className]">{{ stackState.label }}</span>
-    <span class="sep">|</span>
-    <span :class="['backend', backend.status]">
-      {{ backend.status === 'ready' ? '就绪' : backend.status === 'starting' ? '启动中' : '未就绪' }}
+    <span class="metric cursor-metric" :aria-label="`第 ${cursor.line} 行，第 ${cursor.col} 列`">
+      <span class="metric-label">行</span>
+      {{ cursor.line }}
+      <span class="metric-label">列</span>
+      {{ cursor.col }}
+    </span>
+    <StartupClassPicker
+      :workspace-open="Boolean(workspace)"
+      :startup-class="startupClass"
+      :startup-classes="startupClasses"
+      :startup-scanning="startupScanning"
+      :startup-error="startupError"
+      @open-startup-class="emit('open-startup-class', $event)"
+      @rescan-startup="emit('rescan-startup')"
+    />
+    <span :class="['metric', 'state', 'run', runStatus]">
+      <span class="state-dot" aria-hidden="true" />
+      {{ runLabels[runStatus] }}
+    </span>
+    <span :class="['metric', 'state', 'stack', stackState.className]">
+      <span class="state-dot" aria-hidden="true" />
+      {{ stackState.label }}
+    </span>
+    <span :class="['metric', 'state', 'backend', backend.status]">
+      <span class="state-dot" aria-hidden="true" />
+      {{ backendLabel }}
     </span>
   </div>
 </template>
 
 <style scoped>
 .status-bar {
+  position: relative;
+  z-index: 30;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   height: 100%;
   padding: 0 12px;
-  font-size: 11px;
-  color: var(--muted);
-  background: var(--bg-soft);
   border-top: 1px solid var(--border);
+  background: var(--bg-deep);
+  color: var(--text-secondary);
+  font-size: 12px;
 }
-.flex {
-  flex: 1;
-}
-.path {
-  max-width: 46%;
+
+.workspace {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  max-width: 190px;
   overflow: hidden;
+  color: var(--text);
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.sep {
-  color: #44444f;
+
+.workspace-mark {
+  flex: 0 0 7px;
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--accent);
+  border-radius: 2px;
 }
-.run.running {
-  color: var(--accent);
+
+.flex {
+  flex: 1;
 }
-.run.success {
-  color: var(--ok);
+
+.path {
+  min-width: 0;
+  max-width: 44%;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.run.failed {
-  color: var(--err);
+
+.metric {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
 }
+
+.cursor-metric {
+  gap: 4px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.metric-label {
+  color: var(--text-tertiary);
+  font-family: var(--font-ui);
+  font-size: 11px;
+}
+
+.state {
+  gap: 6px;
+}
+
+.state-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+
+.run.running,
 .stack.running {
-  color: var(--accent);
+  color: var(--accent-strong);
 }
-.stack.ready {
-  color: var(--ok);
+
+.run.running .state-dot,
+.stack.running .state-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
-.stack.failed {
-  color: var(--err);
-}
+
+.run.success,
+.stack.ready,
 .backend.ready {
   color: var(--ok);
 }
+
+.run.success .state-dot,
+.stack.ready .state-dot,
+.backend.ready .state-dot {
+  background: var(--ok);
+}
+
+.run.failed,
+.stack.failed,
 .backend.error,
 .backend.missing {
   color: var(--err);
+}
+
+.run.failed .state-dot,
+.stack.failed .state-dot,
+.backend.error .state-dot,
+.backend.missing .state-dot {
+  background: var(--err);
+}
+
+.backend.starting {
+  color: var(--accent-strong);
+}
+
+.backend.starting .state-dot {
+  background: var(--accent);
+}
+@media (max-width: 1180px) {
+  .path {
+    display: none;
+  }
+}
+
+@media (max-width: 980px) {
+  .status-bar {
+    gap: 8px;
+    padding: 0 9px;
+  }
+
+  .cursor-metric {
+    display: none;
+  }
 }
 </style>

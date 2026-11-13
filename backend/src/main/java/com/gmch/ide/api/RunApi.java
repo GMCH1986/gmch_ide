@@ -1,6 +1,6 @@
 package com.gmch.ide.api;
 
-import com.gmch.ide.service.GradleRunner;
+import com.gmch.ide.service.BuildRunner;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -17,22 +17,25 @@ import java.util.concurrent.Executors;
 @RequestMapping("/api/run")
 public class RunApi {
 
-    private final GradleRunner runner;
+    private final BuildRunner runner;
     /** 每个构建任务一个虚拟线程，阻塞在进程读取上不占用平台线程 */
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
-    public RunApi(GradleRunner runner) {
+    public RunApi(BuildRunner runner) {
         this.runner = runner;
     }
 
     @GetMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter run(@RequestParam(defaultValue = "run") String task) {
+    public SseEmitter run(
+            @RequestParam(defaultValue = "run") String task,
+            @RequestParam(required = false) String startupPath
+    ) {
         SseEmitter emitter = new SseEmitter(0L);
 
         executor.submit(() -> {
             try {
                 send(emitter, "start", task);
-                int code = runner.run(task, line -> send(emitter, "log", line));
+                int code = runner.run(task, startupPath, line -> send(emitter, "log", line));
                 send(emitter, "exit", Integer.toString(code));
                 emitter.complete();
             } catch (Exception error) {

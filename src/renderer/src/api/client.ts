@@ -1,10 +1,13 @@
 import type {
+  BuildCommandTarget,
+  BuildToolsResult,
   EnvInfo,
   FileEntry,
   RunTask,
   ServiceLogEvent,
   ServicesStatus,
-  ServiceStateEvent
+  ServiceStateEvent,
+  StartupClassesResult
 } from '../../../shared/types'
 
 interface Connection {
@@ -41,6 +44,18 @@ async function parse<T>(response: Response): Promise<T> {
 
 export async function listFiles(): Promise<FileEntry[]> {
   return parse<FileEntry[]>(await fetch(endpoint('/api/files'), { headers: headers() }))
+}
+
+export async function getBuildTools(): Promise<BuildToolsResult> {
+  return parse<BuildToolsResult>(
+    await fetch(endpoint('/api/build-tools'), { headers: headers() })
+  )
+}
+
+export async function getStartupClasses(): Promise<StartupClassesResult> {
+  return parse<StartupClassesResult>(
+    await fetch(endpoint('/api/startup-class'), { headers: headers() })
+  )
 }
 
 export async function readFile(path: string): Promise<string> {
@@ -81,8 +96,42 @@ export interface RunHandlers {
  * 构建/运行输出走 SSE：EventSource 不能带自定义头，因此 token 走查询参数。
  * 返回值为关闭函数，用于「停止」时立即断开本地连接。
  */
-export function runTask(task: RunTask, handlers: RunHandlers): () => void {
-  const source = new EventSource(endpoint(`/api/run?task=${encodeURIComponent(task)}`, true))
+export function runTask(
+  task: RunTask,
+  startupPath: string | null,
+  handlers: RunHandlers
+): () => void {
+  const query = new URLSearchParams({ task })
+  if (startupPath) query.set('startupPath', startupPath)
+  const source = new EventSource(endpoint(`/api/run?${query.toString()}`, true))
+
+  source.addEventListener('log', (event) => {
+    handlers.onLog((event as MessageEvent<string>).data)
+  })
+  source.addEventListener('exit', (event) => {
+    handlers.onExit((event as MessageEvent<string>).data)
+    source.close()
+  })
+  source.onerror = (): void => {
+    handlers.onError()
+    source.close()
+  }
+
+  return () => source.close()
+}
+
+/** 构建工具导航任务与普通运行任务共用 SSE / 停止接口。 */
+export function runBuildCommand(
+  target: BuildCommandTarget,
+  handlers: RunHandlers
+): () => void {
+  const query = new URLSearchParams({
+    system: target.system,
+    projectPath: target.projectPath,
+    modulePath: target.modulePath,
+    task: target.task
+  })
+  const source = new EventSource(endpoint(`/api/build-tools/run?${query.toString()}`, true))
 
   source.addEventListener('log', (event) => {
     handlers.onLog((event as MessageEvent<string>).data)
